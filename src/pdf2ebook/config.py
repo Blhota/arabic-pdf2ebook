@@ -57,6 +57,7 @@ class EpubMeta:
 @dataclass
 class PipelineOptions:
     mode: str = "auto"  # auto | ocr | image
+    text_layer: str = "auto"  # auto (use when healthy) | always | never
     dpi: int = 300
     pages: str | None = None
     split_volumes: int = 1

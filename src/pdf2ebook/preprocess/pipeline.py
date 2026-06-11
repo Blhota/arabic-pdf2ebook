@@ -40,10 +40,12 @@ def detect_image_page(img: Image.Image) -> bool:
     image pages have either heavy ink coverage or a few huge components.
     """
     gray = ops.from_pil(img)
+    if float(gray.mean()) < 110:  # predominantly dark page: photograph/plate
+        return True
     binary = ops.otsu(gray)
     ink = binary < 128
     coverage = float(ink.mean())
-    if coverage > 0.45:  # mostly dark: photograph or solid plate
+    if coverage > 0.45:  # mostly dark after binarization
         return True
     if coverage < 0.005:  # blank page
         return False

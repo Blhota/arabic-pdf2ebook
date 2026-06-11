@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>تحويل كتب PDF إلى EPUB — Arabic PDF → EPUB</title>
+<style>
+  :root { --accent: #0d7a5f; --bg: #f6f4ef; --card: #ffffff; --ink: #232323; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Tahoma, sans-serif; background: var(--bg); color: var(--ink);
+         margin: 0; padding: 1.5rem; display: flex; justify-content: center; }
+  main { width: 100%; max-width: 620px; }
+  h1 { font-size: 1.4rem; text-align: center; margin: 0.2rem 0; }
+  p.sub { text-align: center; color: #666; margin-top: 0; font-size: 0.9rem; }
+  .card { background: var(--card); border-radius: 12px; padding: 1.2rem;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.07); margin-top: 1rem; }
+  #drop { border: 2px dashed #b9b2a4; border-radius: 12px; padding: 2.2rem 1rem;
+          text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+  #drop.hover { border-color: var(--accent); background: #eef7f4; }
+  #drop strong { display: block; font-size: 1.05rem; }
+  #drop span.en { color: #888; font-size: 0.85rem; }
+  .row { display: flex; gap: 0.8rem; margin-top: 0.9rem; flex-wrap: wrap; }
+  .field { flex: 1 1 160px; }
+  label { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; color: #555; }
+  select, input[type=text], input[type=number] {
+    width: 100%; padding: 0.45rem; border: 1px solid #ccc; border-radius: 8px; font-size: 0.95rem; }
+  button { background: var(--accent); border: 0; color: #fff; font-size: 1rem; font-weight: 600;
+           border-radius: 10px; padding: 0.7rem 1.4rem; cursor: pointer; width: 100%; margin-top: 1rem; }
+  button:disabled { background: #9bbcb2; cursor: default; }
+  button.secondary { background: #44607a; width: auto; padding: 0.5rem 1rem; font-size: 0.9rem; margin-top: 0.5rem; }
+  progress { width: 100%; height: 14px; margin-top: 0.8rem; }
+  #status { margin-top: 0.6rem; font-size: 0.92rem; min-height: 1.3em; }
+  #outputs a { display: inline-block; margin: 0.3rem 0.3rem 0 0; color: var(--accent); font-weight: 600; }
+  .warn { background: #fff3cd; border: 1px solid #ffe08a; border-radius: 8px;
+          padding: 0.6rem 0.8rem; font-size: 0.88rem; margin-top: 0.8rem; display: none; }
+  .small { font-size: 0.8rem; color: #777; }
+  footer { text-align: center; margin-top: 1.2rem; font-size: 0.8rem; color: #999; }
+</style>
+</head>
+<body>
+<main>
+  <h1>📖 تحويل كتب PDF الممسوحة إلى EPUB</h1>
+  <p class="sub">Convert scanned Arabic PDF books to e-reader EPUB — يعمل كل شيء على جهازك</p>
+
+  <div class="card">
+    <div id="drop">
+      <strong>اسحب ملف PDF هنا أو انقر للاختيار</strong>
+      <span class="en">Drag a PDF here, or click to choose a file</span>
+      <input id="file" type="file" accept="application/pdf" hidden/>
+      <div id="picked" class="small"></div>
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label>طريقة التحويل — Mode</label>
+        <select id="mode">
+          <option value="auto">نص (OCR) — Text, resizable</option>
+          <option value="image">صور محسّنة — Cleaned page images</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>الجهاز — Device (image mode)</label>
+        <select id="device">
+          <option value="generic-6in">Generic 6-inch</option>
+          <option value="generic-6in-hd">Generic 6-inch HD</option>
+          <option value="xteink-x4">Xteink X4 (CrossPoint)</option>
+          <option value="kindle-pw11">Kindle Paperwhite 11</option>
+          <option value="none">Original size</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>تقسيم لمجلدات — Split volumes</label>
+        <input id="volumes" type="number" min="1" max="20" value="1"/>
+      </div>
+    </div>
+
+    <div id="ocr-warn" class="warn"></div>
+    <button id="go" disabled>ابدأ التحويل — Convert</button>
+    <progress id="bar" max="1" value="0" hidden></progress>
+    <div id="status"></div>
+    <div id="outputs"></div>
+
+    <div id="send-box" hidden>
+      <label style="margin-top:0.8rem">إرسال إلى القارئ عبر Wi-Fi — Send to reader
+        (CrossPoint)</label>
+      <input id="host" type="text" placeholder="crosspoint.local or 192.168.1.50"/>
+      <button id="send" class="secondary">📤 أرسل — Send</button>
+    </div>
+  </div>
+
+  <footer>arabic-pdf2ebook — free &amp; open source · مجاني ومفتوح المصدر</footer>
+</main>
+
+<script>
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('file');
+const picked = document.getElementById('picked');
+const go = document.getElementById('go');
+const bar = document.getElementById('bar');
+const statusEl = document.getElementById('status');
+const outputsEl = document.getElementById('outputs');
+const sendBox = document.getElementById('send-box');
+let chosen = null, jobId = null;
+
+const stageNames = {
+  extract: 'استخراج الصفحات — Extracting pages',
+  preprocess: 'تنظيف الصور — Cleaning images',
+  ocr: 'التعرف على النص — Recognizing text',
+  epub: 'بناء الكتاب — Building EPUB',
+  starting: 'جارٍ البدء — Starting'
+};
+
+fetch('/api/status').then(r => r.json()).then(s => {
+  const t = s.engines.tesseract;
+  if (t && !t.available) {
+    const warn = document.getElementById('ocr-warn');
+    warn.style.display = 'block';
+    warn.textContent = 'وضع النص يتطلب تثبيت Tesseract — Text mode needs Tesseract: ' + t.hint.split('\n')[1];
+  }
+});
+
+drop.addEventListener('click', () => fileInput.click());
+['dragover', 'dragenter'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('hover'); }));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('hover'); }));
+drop.addEventListener('drop', e => { if (e.dataTransfer.files.length) pick(e.dataTransfer.files[0]); });
+fileInput.addEventListener('change', () => { if (fileInput.files.length) pick(fileInput.files[0]); });
+
+function pick(f) {
+  if (!f.name.toLowerCase().endsWith('.pdf')) { alert('PDF فقط — PDF files only'); return; }
+  chosen = f;
+  picked.textContent = f.name + ' (' + (f.size / 1048576).toFixed(1) + ' MB)';
+  go.disabled = false;
+}
+
+go.addEventListener('click', async () => {
+  if (!chosen) return;
+  go.disabled = true;
+  outputsEl.innerHTML = ''; sendBox.hidden = true;
+  bar.hidden = false; bar.value = 0;
+  statusEl.textContent = 'جارٍ رفع الملف — Uploading…';
+  const fd = new FormData();
+  fd.append('file', chosen);
+  fd.append('mode', document.getElementById('mode').value);
+  fd.append('device', document.getElementById('device').value);
+  fd.append('split_volumes', document.getElementById('volumes').value);
+  const res = await fetch('/api/convert', { method: 'POST', body: fd });
+  if (!res.ok) { statusEl.textContent = 'خطأ — Error: ' + await res.text(); go.disabled = false; return; }
+  jobId = (await res.json()).job_id;
+  poll();
+});
+
+async function poll() {
+  const res = await fetch('/api/jobs/' + jobId);
+  const job = await res.json();
+  if (job.status === 'running') {
+    bar.max = job.total || 1; bar.value = job.done || 0;
+    statusEl.textContent = (stageNames[job.stage] || job.stage) + '  (' + job.done + '/' + job.total + ')';
+    setTimeout(poll, 700);
+    return;
+  }
+  go.disabled = false;
+  if (job.status === 'error') {
+    bar.hidden = true;
+    statusEl.textContent = '❌ ' + job.error;
+    return;
+  }
+  bar.value = bar.max;
+  let summary = '✅ تم التحويل — Done!';
+  if (job.stats && job.stats.pages_total) {
+    summary += ` (${job.stats.pages_total} صفحة: ${job.stats.pages_direct_text || 0} نص مباشر، ${job.stats.pages_ocr || 0} OCR، ${job.stats.pages_image_fallback || 0} صور)`;
+  }
+  statusEl.textContent = summary;
+  outputsEl.innerHTML = job.outputs.map(o =>
+    `<a href="/api/download/${jobId}/${o.index}" download>⬇ ${o.name} (${(o.size / 1048576).toFixed(1)} MB)</a>`
+  ).join('');
+  sendBox.hidden = job.outputs.length === 0;
+}
+
+document.getElementById('send').addEventListener('click', async () => {
+  const fd = new FormData();
+  fd.append('job_id', jobId);
+  fd.append('index', '0');
+  fd.append('host', document.getElementById('host').value);
+  statusEl.textContent = 'جارٍ الإرسال — Sending…';
+  const res = await fetch('/api/send', { method: 'POST', body: fd });
+  if (res.ok) {
+    const data = await res.json();
+    statusEl.textContent = '✅ وصل الكتاب إلى القارئ — Sent to ' + data.host;
+  } else {
+    statusEl.textContent = '❌ ' + (await res.json()).detail;
+  }
+});
+</script>
+</body>
+</html>

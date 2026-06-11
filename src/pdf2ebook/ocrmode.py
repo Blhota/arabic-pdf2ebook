@@ -1,0 +1,347 @@
+"""OCR / auto mode: scanned pages → recognized text → reflowable RTL EPUB.
+
+Per-page decision tree (auto mode):
+    1. real PDF text layer (> TEXT_LAYER_MIN_CHARS) → use it directly, no OCR
+    2. page looks like a photo/map                  → keep as cleaned image
+    3. OCR; low-confidence pages get a rescue pass  → text
+    4. still below --min-conf                       → keep as cleaned image
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from PIL import Image
+
+from .book import Book, Chapter, PageImage, Paragraph
+from .config import PipelineOptions, parse_page_range
+from .epub.reflow import build_reflow_epub
+from .ocr.base import OcrPage
+from .ocr.registry import get_backend
+from .pdfio import PdfRasterizer
+from .pipeline import ConversionResult, Progress, default_title, default_work_dir, extract_pages
+from .preprocess import ops
+from .preprocess.pipeline import detect_image_page, preprocess_for_image, preprocess_for_ocr
+from .textproc import clean
+from .textproc.chapters import detect_heading_lines, looks_like_heading_text
+from .textproc.paragraphs import TERMINAL_PUNCT, merge_page_boundary, page_paragraphs
+from .workdir import WorkDir
+
+TEXT_LAYER_MIN_CHARS = 200
+MIN_WORDS_PER_PAGE = 15
+SCAN_MAX_HEIGHT = 1400
+
+
+@dataclass
+class PageData:
+    index: int
+    kind: str  # "text" | "ocr" | "image"
+    elements: list[tuple[str, str]] = field(default_factory=list)  # (kind, text), kind in p|h2
+    image_rel: str | None = None
+    mean_conf: float = 100.0
+    lines: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Stages
+# ---------------------------------------------------------------------------
+
+def preprocess_ocr_pages(work: WorkDir, raw_paths: list[Path], force: bool = False,
+                         progress: Progress | None = None) -> dict[str, Path]:
+    settings = {"v": 1}
+    if force:
+        work.invalidate("pre-ocr")
+    work.begin_stage("pre-ocr", settings)
+    out: dict[str, Path] = {}
+    for n, src in enumerate(raw_paths):
+        dest = work.root / "pre-ocr" / src.name
+        if not dest.exists():
+            with Image.open(src) as img:
+                preprocess_for_ocr(img).save(dest, format="PNG")
+        out[src.name] = dest
+        if progress:
+            progress("preprocess", n + 1, len(raw_paths))
+    return out
+
+
+def _alternate_ocr_image(raw_path: Path) -> Image.Image:
+    """Different binarization recipe for the rescue pass."""
+    with Image.open(raw_path) as img:
+        gray = ops.from_pil(img)
+    gray = ops.deskew(gray)
+    gray = ops.clahe(gray)
+    binary = ops.otsu(gray)
+    binary = ops.autocrop(binary)
+    binary = ops.upscale_if_small(binary)
+    return ops.to_pil(binary)
+
+
+def _make_scan_image(work: WorkDir, raw_path: Path, index: int) -> str:
+    """Cleaned grayscale rendition of a page kept as an image; returns rel path."""
+    scans = work.stage_dir("scans")
+    dest = scans / WorkDir.page_name(index, "png")
+    if not dest.exists():
+        with Image.open(raw_path) as img:
+            cleaned = preprocess_for_image(img, 0, 0, style="gray")
+            if cleaned.height > SCAN_MAX_HEIGHT:
+                factor = SCAN_MAX_HEIGHT / cleaned.height
+                cleaned = cleaned.resize(
+                    (max(1, int(cleaned.width * factor)), SCAN_MAX_HEIGHT), Image.LANCZOS)
+            cleaned.save(dest, format="PNG")
+    return str(dest.relative_to(work.root))
+
+
+# ---------------------------------------------------------------------------
+# Direct text-layer pages
+# ---------------------------------------------------------------------------
+
+def direct_text_elements(text: str) -> list[tuple[str, str]]:
+    lines = [clean.normalize_arabic(ln) for ln in text.splitlines()]
+    lines = [ln for ln in lines if ln]
+    paragraphs: list[str] = []
+    buffer: list[str] = []
+    for line in lines:
+        buffer.append(line)
+        if line and line[-1] in TERMINAL_PUNCT:
+            paragraphs.append(" ".join(buffer))
+            buffer = []
+    if buffer:
+        paragraphs.append(" ".join(buffer))
+    out: list[tuple[str, str]] = []
+    for par in paragraphs:
+        kind = "h2" if looks_like_heading_text(par) else "p"
+        out.append((kind, par))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# OCR pages → elements
+# ---------------------------------------------------------------------------
+
+def ocr_page_elements(page: OcrPage, keep_diacritics: bool) -> list[tuple[str, str]]:
+    heading_idx = set(detect_heading_lines(page))
+    heading_texts = {clean.normalize_arabic(page.lines[i].text, keep_diacritics)
+                     for i in heading_idx}
+    paragraphs = page_paragraphs(page)
+    out: list[tuple[str, str]] = []
+    for par in paragraphs:
+        normalized = clean.normalize_arabic(par, keep_diacritics)
+        if not normalized:
+            continue
+        is_heading = normalized in heading_texts or (
+            len(normalized.split()) <= 8 and looks_like_heading_text(normalized)
+        )
+        out.append(("h2" if is_heading else "p", normalized))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Main entry
+# ---------------------------------------------------------------------------
+
+def run_text_mode(
+    pdf_path: Path,
+    out_path: Path,
+    opts: PipelineOptions,
+    progress: Progress | None = None,
+) -> ConversionResult:
+    result = ConversionResult()
+    work = WorkDir(opts.work_dir or default_work_dir(pdf_path), pdf_path)
+    extra_patterns = clean.compile_extra_patterns(opts.ocr.strip_patterns)
+
+    with PdfRasterizer(pdf_path) as pdf:
+        indices = parse_page_range(opts.pages, pdf.page_count)
+        result.pages_total = len(indices)
+        force_extract = opts.force in ("extract", "all")
+        raw_paths = extract_pages(pdf, work, indices, opts.dpi, force_extract, progress)
+        raw_by_index = dict(zip(indices, raw_paths))
+
+        # 1. Which pages can use the PDF's own text layer? (auto mode only)
+        direct_text: dict[int, str] = {}
+        if opts.mode == "auto" and opts.text_layer != "never":
+            for idx in indices:
+                text = pdf.extract_text(idx)
+                stripped = text.strip()
+                if len(stripped) >= TEXT_LAYER_MIN_CHARS:
+                    direct_text[idx] = stripped
+            # Quality gate: many scanned books embed a *broken* text layer
+            # (lam-alef ligatures lose the alef, hamza forms scramble).
+            # When the sampled text looks corrupted, ignore the whole layer
+            # and OCR instead — unless the user forces --text-layer always.
+            if direct_text and opts.text_layer == "auto":
+                sample = "\n".join(list(direct_text.values())[:10])
+                if clean.looks_corrupted_arabic(sample):
+                    direct_text.clear()
+
+    # 2. Preprocess + OCR the remaining pages.
+    ocr_indices = [i for i in indices if i not in direct_text]
+    force_pre = opts.force in ("preprocess", "all") or force_extract
+    pre_paths = preprocess_ocr_pages(
+        work, [raw_by_index[i] for i in ocr_indices], force_pre, progress
+    ) if ocr_indices else {}
+
+    backend = None
+    pages_data: list[PageData] = []
+    ocr_stage = f"ocr-{opts.ocr.engine}"
+    ocr_settings = {"engine": opts.ocr.engine, "lang": opts.ocr.lang,
+                    "psm": opts.ocr.psm, "rescue": opts.ocr.rescue, "v": 1}
+    if opts.force in ("ocr", "all"):
+        work.invalidate(ocr_stage)
+    work.begin_stage(ocr_stage, ocr_settings)
+
+    rescue_threshold = opts.ocr.min_conf + 15
+
+    for n, idx in enumerate(indices):
+        if idx in direct_text:
+            data = PageData(index=idx, kind="text")
+            data.elements = direct_text_elements(direct_text[idx])
+            data.lines = [ln for _, ln in data.elements]
+            result.pages_direct_text += 1
+            pages_data.append(data)
+            continue
+
+        raw_path = raw_by_index[idx]
+        cache = work.page_path(ocr_stage, idx, "json")
+
+        if cache.exists():
+            ocr_page = OcrPage.from_json(cache.read_text(encoding="utf-8"))
+        else:
+            with Image.open(raw_path) as raw_img:
+                is_image_page = detect_image_page(raw_img)
+            if is_image_page:
+                ocr_page = OcrPage(page_no=idx, size=(0, 0), lines=[])
+            else:
+                if backend is None:
+                    backend = get_backend(opts.ocr.engine, lang=opts.ocr.lang, psm=opts.ocr.psm)
+                ocr_page = backend.recognize(pre_paths[raw_path.name])
+                ocr_page.page_no = idx
+                if opts.ocr.rescue and ocr_page.mean_conf < rescue_threshold:
+                    alt_path = work.stage_dir("pre-ocr-alt") / raw_path.name
+                    if not alt_path.exists():
+                        _alternate_ocr_image(raw_path).save(alt_path, format="PNG")
+                    retry = backend.recognize(alt_path)
+                    retry.page_no = idx
+                    if retry.mean_conf > ocr_page.mean_conf:
+                        ocr_page = retry
+            cache.write_text(ocr_page.to_json(), encoding="utf-8")
+
+        good = (ocr_page.mean_conf >= opts.ocr.min_conf
+                and ocr_page.word_count >= MIN_WORDS_PER_PAGE)
+        if good:
+            data = PageData(index=idx, kind="ocr", mean_conf=ocr_page.mean_conf)
+            data.elements = ocr_page_elements(ocr_page, opts.ocr.keep_diacritics)
+            data.lines = [ln.text for ln in ocr_page.lines if ln.text.strip()]
+            result.pages_ocr += 1
+            result.mean_confidences.append(ocr_page.mean_conf)
+        else:
+            data = PageData(index=idx, kind="image", mean_conf=ocr_page.mean_conf)
+            data.image_rel = _make_scan_image(work, raw_path, idx)
+            result.pages_image_fallback += 1
+        pages_data.append(data)
+        if progress:
+            progress("ocr", n + 1, len(indices))
+
+    # 3. Strip repeated headers/footers/watermarks and page numbers.
+    repeated = clean.find_repeated_lines([p.lines for p in pages_data if p.kind != "image"])
+    result.stripped_lines = repeated
+
+    def keep_element(text: str) -> bool:
+        if clean.is_watermark(text, extra_patterns):
+            return False
+        if clean.is_page_number(text):
+            return False
+        if repeated and clean.matches_repeated(text, repeated):
+            return False
+        return True
+
+    for data in pages_data:
+        data.elements = [(k, t) for k, t in data.elements if keep_element(t)]
+
+    # 4. Merge paragraphs across page boundaries.
+    for prev, cur in zip(pages_data, pages_data[1:]):
+        if prev.kind == "image" or cur.kind == "image":
+            continue
+        if not prev.elements or not cur.elements:
+            continue
+        if prev.elements[-1][0] != "p" or cur.elements[0][0] != "p":
+            continue
+        merged_prev, merged_cur = merge_page_boundary(
+            [prev.elements[-1][1]], [cur.elements[0][1]]
+        )
+        if len(merged_cur) == 0:  # merge happened
+            prev.elements[-1] = ("p", merged_prev[-1])
+            cur.elements.pop(0)
+
+    # 5. Chapter assembly.
+    heading_count = sum(1 for p in pages_data for k, _ in p.elements if k == "h2")
+    chapters: list[Chapter] = []
+    current = Chapter(title="")
+    pages_in_chapter = 0
+    use_headings = heading_count >= 2
+
+    def flush() -> None:
+        nonlocal current, pages_in_chapter
+        if current.elements:
+            chapters.append(current)
+        current = Chapter(title="")
+        pages_in_chapter = 0
+
+    for data in pages_data:
+        if data.kind == "image":
+            current.elements.append(PageImage(data.index, data.image_rel or ""))
+        else:
+            for kind, text in data.elements:
+                if kind == "h2" and use_headings:
+                    flush()
+                    current.title = text
+                    current.elements.append(Paragraph(text, "h2"))
+                else:
+                    current.elements.append(Paragraph(text, kind))
+        pages_in_chapter += 1
+        if not use_headings and pages_in_chapter >= max(1, opts.split_every):
+            flush()
+    flush()
+
+    if not chapters:
+        chapters = [Chapter(title="", elements=[Paragraph("(لم يُتعرف على نص)", "p")])]
+    for i, chapter in enumerate(chapters):
+        if not chapter.title:
+            chapter.title = f"قسم {i + 1}"
+
+    title = opts.meta.title or default_title(pdf_path)
+    book = Book(title=title, author=opts.meta.author, language=opts.meta.language,
+                chapters=chapters)
+    text_dir = work.stage_dir("text")
+    book.save(text_dir / "book.json")
+
+    # 6. Build EPUB volume(s).
+    from .pipeline import _volume_chunks, _volume_path
+
+    font_files = resolve_fonts(opts.font)
+    chunks = _volume_chunks(chapters, opts.split_volumes)
+    for vol, chunk in enumerate(chunks):
+        vol_title = title if len(chunks) == 1 else f"{title} — {vol + 1}"
+        vol_out = _volume_path(out_path, vol, len(chunks))
+        vol_book = Book(title=vol_title, author=book.author, language=book.language,
+                        chapters=chunk)
+        build_reflow_epub(vol_book, vol_out, work.root, font_files)
+        result.outputs.append(vol_out)
+        if progress:
+            progress("epub", vol + 1, len(chunks))
+
+    if opts.clean:
+        work.cleanup()
+    return result
+
+
+def resolve_fonts(choice: str) -> list[Path]:
+    if choice == "none":
+        return []
+    fonts_dir = Path(__file__).parent / "fonts"
+    mapping = {
+        "amiri": ["Amiri-Regular.ttf"],
+        "scheherazade": ["ScheherazadeNew-Regular.ttf"],
+    }
+    files = [fonts_dir / name for name in mapping.get(choice, [])]
+    return [f for f in files if f.exists()]

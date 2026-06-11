@@ -55,6 +55,7 @@ def convert(
     pdf: Path = typer.Argument(..., help="Input PDF file"),
     output: Optional[Path] = typer.Argument(None, help="Output EPUB path (default: beside the PDF)"),
     mode: str = typer.Option("auto", help="auto | ocr | image"),
+    text_layer: str = typer.Option("auto", help="Use the PDF's embedded text layer: auto | always | never"),
     engine: str = typer.Option("tesseract", help="OCR engine: tesseract | surya"),
     lang: str = typer.Option("ara", help="Tesseract language string, e.g. 'ara' or 'ara+eng'"),
     device: str = typer.Option(DEFAULT_PROFILE, help="Device profile for image mode (see `devices`)"),
@@ -84,7 +85,8 @@ def convert(
         raise typer.Exit(2)
 
     opts = PipelineOptions(
-        mode=mode, dpi=dpi, pages=pages, split_volumes=split_volumes, split_every=split_every,
+        mode=mode, text_layer=text_layer, dpi=dpi, pages=pages,
+        split_volumes=split_volumes, split_every=split_every,
         font=font, work_dir=work_dir, force=force, clean=clean,
         ocr=OcrOptions(engine=engine, lang=lang, psm=psm, min_conf=min_conf,
                        rescue=rescue, strip_patterns=list(strip_pattern)),
@@ -117,7 +119,7 @@ def convert(
                 from .ocrmode import run_text_mode
 
                 result = run_text_mode(pdf, out_path, opts, on_progress)
-    except PdfError as exc:
+    except (PdfError, RuntimeError, ValueError) as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1)
 
