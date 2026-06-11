@@ -1,16 +1,20 @@
 """OCR / auto mode: scanned pages → recognized text → reflowable RTL EPUB.
 
 Per-page decision tree (auto mode):
-    1. real PDF text layer (> TEXT_LAYER_MIN_CHARS) → use it directly, no OCR
+    1. real PDF text layer (> TEXT_LAYER_MIN_CHARS, healthy) → use it directly
     2. page looks like a photo/map                  → keep as cleaned image
     3. OCR; low-confidence pages get a rescue pass  → text
     4. still below --min-conf                       → keep as cleaned image
+
+Junk removal happens at the *line* level before paragraphs are built, so an
+OCR-mangled watermark can never be merged into a real paragraph.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from PIL import Image
 
@@ -32,15 +36,24 @@ TEXT_LAYER_MIN_CHARS = 200
 MIN_WORDS_PER_PAGE = 15
 SCAN_MAX_HEIGHT = 1400
 
+DropLine = Callable[[str, bool], bool]  # (line_text, is_page_edge) -> drop?
+
 
 @dataclass
 class PageData:
     index: int
     kind: str  # "text" | "ocr" | "image"
-    elements: list[tuple[str, str]] = field(default_factory=list)  # (kind, text), kind in p|h2
+    payload: object = None  # OcrPage | str | None
+    elements: list[tuple[str, str]] = field(default_factory=list)  # (p|h2, text)
     image_rel: str | None = None
     mean_conf: float = 100.0
-    lines: list[str] = field(default_factory=list)
+
+    def line_texts(self) -> list[str]:
+        if self.kind == "ocr":
+            return [ln.text for ln in self.payload.lines if ln.text.strip()]
+        if self.kind == "text":
+            return [ln for ln in str(self.payload).splitlines() if ln.strip()]
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -93,12 +106,14 @@ def _make_scan_image(work: WorkDir, raw_path: Path, index: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Direct text-layer pages
+# Page content → (kind, text) elements, with line-level junk filtering
 # ---------------------------------------------------------------------------
 
-def direct_text_elements(text: str) -> list[tuple[str, str]]:
-    lines = [clean.normalize_arabic(ln) for ln in text.splitlines()]
-    lines = [ln for ln in lines if ln]
+def direct_text_elements(text: str, drop_line: DropLine) -> list[tuple[str, str]]:
+    raw_lines = [clean.normalize_arabic(ln) for ln in text.splitlines()]
+    raw_lines = [ln for ln in raw_lines if ln]
+    lines = [ln for i, ln in enumerate(raw_lines)
+             if not drop_line(ln, i < 2 or i >= len(raw_lines) - 2)]
     paragraphs: list[str] = []
     buffer: list[str] = []
     for line in lines:
@@ -115,17 +130,19 @@ def direct_text_elements(text: str) -> list[tuple[str, str]]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# OCR pages → elements
-# ---------------------------------------------------------------------------
+def ocr_page_elements(page: OcrPage, keep_diacritics: bool,
+                      drop_line: DropLine) -> list[tuple[str, str]]:
+    visible = [ln for ln in page.lines if ln.text.strip()]
+    kept = [ln for i, ln in enumerate(visible)
+            if not drop_line(clean.normalize_arabic(ln.text, keep_diacritics),
+                             i < 2 or i >= len(visible) - 2)]
+    filtered = OcrPage(page_no=page.page_no, size=page.size, lines=kept)
 
-def ocr_page_elements(page: OcrPage, keep_diacritics: bool) -> list[tuple[str, str]]:
-    heading_idx = set(detect_heading_lines(page))
-    heading_texts = {clean.normalize_arabic(page.lines[i].text, keep_diacritics)
+    heading_idx = set(detect_heading_lines(filtered))
+    heading_texts = {clean.normalize_arabic(filtered.lines[i].text, keep_diacritics)
                      for i in heading_idx}
-    paragraphs = page_paragraphs(page)
     out: list[tuple[str, str]] = []
-    for par in paragraphs:
+    for par in page_paragraphs(filtered):
         normalized = clean.normalize_arabic(par, keep_diacritics)
         if not normalized:
             continue
@@ -174,7 +191,7 @@ def run_text_mode(
                 if clean.looks_corrupted_arabic(sample):
                     direct_text.clear()
 
-    # 2. Preprocess + OCR the remaining pages.
+    # 2. Recognition pass: text layer / OCR / image per page.
     ocr_indices = [i for i in indices if i not in direct_text]
     force_pre = opts.force in ("preprocess", "all") or force_extract
     pre_paths = preprocess_ocr_pages(
@@ -194,11 +211,8 @@ def run_text_mode(
 
     for n, idx in enumerate(indices):
         if idx in direct_text:
-            data = PageData(index=idx, kind="text")
-            data.elements = direct_text_elements(direct_text[idx])
-            data.lines = [ln for _, ln in data.elements]
+            pages_data.append(PageData(index=idx, kind="text", payload=direct_text[idx]))
             result.pages_direct_text += 1
-            pages_data.append(data)
             continue
 
         raw_path = raw_by_index[idx]
@@ -229,34 +243,38 @@ def run_text_mode(
         good = (ocr_page.mean_conf >= opts.ocr.min_conf
                 and ocr_page.word_count >= MIN_WORDS_PER_PAGE)
         if good:
-            data = PageData(index=idx, kind="ocr", mean_conf=ocr_page.mean_conf)
-            data.elements = ocr_page_elements(ocr_page, opts.ocr.keep_diacritics)
-            data.lines = [ln.text for ln in ocr_page.lines if ln.text.strip()]
+            pages_data.append(PageData(index=idx, kind="ocr", payload=ocr_page,
+                                       mean_conf=ocr_page.mean_conf))
             result.pages_ocr += 1
             result.mean_confidences.append(ocr_page.mean_conf)
         else:
             data = PageData(index=idx, kind="image", mean_conf=ocr_page.mean_conf)
             data.image_rel = _make_scan_image(work, raw_path, idx)
+            pages_data.append(data)
             result.pages_image_fallback += 1
-        pages_data.append(data)
         if progress:
             progress("ocr", n + 1, len(indices))
 
-    # 3. Strip repeated headers/footers/watermarks and page numbers.
-    repeated = clean.find_repeated_lines([p.lines for p in pages_data if p.kind != "image"])
+    # 3. Detect repeated headers/footers, then build elements with the
+    #    line-level junk filter (watermarks never reach paragraph building).
+    repeated = clean.find_repeated_lines([p.line_texts() for p in pages_data
+                                          if p.kind != "image"])
     result.stripped_lines = repeated
 
-    def keep_element(text: str) -> bool:
+    def drop_line(text: str, edge: bool) -> bool:
         if clean.is_watermark(text, extra_patterns):
-            return False
+            return True
         if clean.is_page_number(text):
-            return False
-        if repeated and clean.matches_repeated(text, repeated):
-            return False
-        return True
+            return True
+        if clean.is_junk_line(text, edge=edge):
+            return True
+        return bool(repeated) and clean.matches_repeated(text, repeated)
 
     for data in pages_data:
-        data.elements = [(k, t) for k, t in data.elements if keep_element(t)]
+        if data.kind == "ocr":
+            data.elements = ocr_page_elements(data.payload, opts.ocr.keep_diacritics, drop_line)
+        elif data.kind == "text":
+            data.elements = direct_text_elements(str(data.payload), drop_line)
 
     # 4. Merge paragraphs across page boundaries.
     for prev, cur in zip(pages_data, pages_data[1:]):

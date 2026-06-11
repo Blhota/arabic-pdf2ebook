@@ -102,6 +102,31 @@ def compile_extra_patterns(patterns: list[str]) -> list[re.Pattern]:
     return [re.compile(p, re.IGNORECASE) for p in patterns]
 
 
+_ARABIC_LETTER_RE = re.compile(r"[ء-ي٠-٩]")
+
+
+def is_junk_line(line: str, edge: bool = False) -> bool:
+    """Mostly non-Arabic debris (OCR'd watermarks, separators like '* * *').
+
+    `edge=True` applies the stricter test used for the first/last lines of a
+    page, where running footers and watermarks live.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return True
+    arabic = len(_ARABIC_LETTER_RE.findall(stripped))
+    ratio = arabic / len(stripped)
+    if arabic == 0 and not re.search(r"[A-Za-z0-9]", stripped):
+        return True  # pure punctuation/symbols ('* * *' separators, debris)
+    if len(stripped) <= 4 and arabic == 0:
+        return True
+    if edge and len(stripped) <= 3:
+        return True  # catchwords / OCR debris at page edges
+    if edge and len(stripped) <= 35 and ratio < 0.4:
+        return True
+    return False
+
+
 # Signals of a broken embedded text layer (bad CMap / lossy OCR by the PDF
 # producer). The classic symptom: the lam-alef ligature لا decomposes into a
 # bare ل, so "لا شيء" turns into "ل شيء" and "الإسلامية" into "السإلمية".

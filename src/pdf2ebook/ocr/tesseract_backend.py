@@ -103,6 +103,10 @@ class TesseractBackend(OcrBackend):
         except Exception:
             available = []
         self._tessdata_dir = ensure_language(lang, available)
+        if self._tessdata_dir is not None:
+            # Env var instead of --tessdata-dir: immune to config-string
+            # quoting issues and to spaces in the user profile path.
+            os.environ["TESSDATA_PREFIX"] = str(self._tessdata_dir)
 
     @classmethod
     def is_available(cls) -> tuple[bool, str]:
@@ -115,8 +119,6 @@ class TesseractBackend(OcrBackend):
             "-c preserve_interword_spaces=1",
             "--dpi 300",
         ]
-        if self._tessdata_dir is not None:
-            parts.append(f'--tessdata-dir "{self._tessdata_dir}"')
         return " ".join(parts)
 
     def recognize(self, image_path: Path, psm: int | None = None) -> OcrPage:

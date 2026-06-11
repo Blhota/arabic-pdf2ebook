@@ -41,7 +41,8 @@ dev = ["pytest>=8", "ruff", "mypy"]
 pdf2ebook = "pdf2ebook.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/OWNER/arabic-pdf2ebook"
+Homepage = "https://github.com/Blhota/arabic-pdf2ebook"
+Issues = "https://github.com/Blhota/arabic-pdf2ebook/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

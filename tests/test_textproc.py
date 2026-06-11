@@ -44,6 +44,16 @@ def test_find_repeated_lines_catches_mangled_watermark():
     assert not clean.matches_repeated("وكانت غرناطة تدفع الجزية غالبا", repeated)
 
 
+def test_junk_line_catches_mangled_watermark_at_page_edge():
+    # The kotob.has.it watermark often OCRs as digit/punctuation debris.
+    assert clean.is_junk_line("0 :/0)0. 8 1/", edge=True)
+    assert clean.is_junk_line("* * *", edge=False)
+    assert clean.is_junk_line("ل١", edge=True)
+    # Real short Arabic edge lines survive.
+    assert not clean.is_junk_line("وكان من خيرة بني الأحمر", edge=True)
+    assert not clean.is_junk_line("مقدمة", edge=True)
+
+
 def test_looks_corrupted_arabic_detects_broken_lam_alef():
     broken = "وأنت الخر ل شيء بعدك وأنت الفردا ل شريك لك السإلمية يا واهب العقول " * 10
     healthy = "وكان المسلمون بالأندلس يستنجدون بسلاطين المغرب كلما اشتد ضغط الإسبانيين عليهم " * 10
