@@ -80,6 +80,18 @@
       </div>
     </div>
 
+    <div class="row">
+      <div class="field" style="flex-basis:100%">
+        <label style="display:flex;gap:0.4rem;align-items:flex-start;cursor:pointer">
+          <input id="preshape" type="checkbox" style="margin-top:0.2rem"/>
+          <span>توافق CrossPoint: وصل الحروف مسبقًا — CrossPoint compatibility: pre-join Arabic letters
+            <span class="hint">فعّله فقط لقارئات CrossPoint (Xteink). اتركه مغلقًا للهواتف وكوبو وآبل —
+            Only for CrossPoint readers; keep OFF for phones, Kobo, Apple.</span>
+          </span>
+        </label>
+      </div>
+    </div>
+
     <div id="ocr-warn" class="warn"></div>
     <button id="go" disabled>ابدأ التحويل — Convert</button>
     <progress id="bar" max="1" value="0" hidden></progress>
@@ -91,6 +103,9 @@
         (CrossPoint)</label>
       <input id="host" type="text" placeholder="crosspoint.local or 192.168.1.50"/>
       <button id="send" class="secondary">📤 أرسل — Send</button>
+      <button id="install-font" class="secondary">🔤 ثبّت الخط العربي — Install Arabic font</button>
+      <div class="hint">ثبّت الخط مرة واحدة على قارئ CrossPoint ثم اختر Amiri من إعدادات القارئ —
+      One-time font install for CrossPoint; then pick Amiri in the reader settings.</div>
     </div>
   </div>
 
@@ -163,6 +178,7 @@ go.addEventListener('click', async () => {
   fd.append('mode', document.getElementById('mode').value);
   fd.append('device', document.getElementById('device').value);
   fd.append('split_volumes', document.getElementById('volumes').value);
+  fd.append('preshape', document.getElementById('preshape').checked ? 'true' : 'false');
   const res = await fetch('/api/convert', { method: 'POST', body: fd });
   if (!res.ok) { statusEl.textContent = 'خطأ — Error: ' + await res.text(); go.disabled = false; return; }
   jobId = (await res.json()).job_id;
@@ -195,6 +211,19 @@ async function poll() {
   ).join('');
   sendBox.hidden = job.outputs.length === 0;
 }
+
+document.getElementById('install-font').addEventListener('click', async () => {
+  const fd = new FormData();
+  fd.append('host', document.getElementById('host').value);
+  statusEl.textContent = 'جارٍ تثبيت الخط — Installing font…';
+  const res = await fetch('/api/install-font', { method: 'POST', body: fd });
+  if (res.ok) {
+    const data = await res.json();
+    statusEl.textContent = '✅ ثُبّت الخط (' + data.files + ' ملفات) — اختر Amiri من إعدادات القارئ';
+  } else {
+    statusEl.textContent = '❌ ' + (await res.json()).detail;
+  }
+});
 
 document.getElementById('send').addEventListener('click', async () => {
   const fd = new FormData();

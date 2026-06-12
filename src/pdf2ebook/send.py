@@ -50,17 +50,21 @@ def _multipart_body(field: str, filename: str, data: bytes,
     return head + data + tail, boundary
 
 
-def send_to_reader(epub: Path, host: str | None = None, dest_path: str = "/") -> str:
-    """Upload an EPUB to the reader; returns the target host used."""
-    epub = Path(epub)
-    if not epub.exists():
-        raise FileNotFoundError(epub)
-
+def resolve_host(host: str | None) -> str:
     config = load_config()
     host = (host or config.get("reader_host") or DEFAULT_HOST).strip()
-    host = host.removeprefix("http://").removeprefix("https://").strip("/")
+    return host.removeprefix("http://").removeprefix("https://").strip("/")
 
-    body, boundary = _multipart_body("file", epub.name, epub.read_bytes())
+
+def upload_file(path: Path, host: str | None = None, dest_path: str = "/",
+                content_type: str = "application/octet-stream") -> str:
+    """Upload any file to the CrossPoint reader; returns the host used."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    host = resolve_host(host)
+
+    body, boundary = _multipart_body("file", path.name, path.read_bytes(), content_type)
     url = f"http://{host}/upload?path={urllib.parse.quote(dest_path)}"
     request = urllib.request.Request(
         url, data=body, method="POST",
@@ -70,6 +74,12 @@ def send_to_reader(epub: Path, host: str | None = None, dest_path: str = "/") ->
         if response.status != 200:
             raise RuntimeError(f"Reader answered HTTP {response.status}")
 
+    config = load_config()
     config["reader_host"] = host
     save_config(config)
     return host
+
+
+def send_to_reader(epub: Path, host: str | None = None, dest_path: str = "/") -> str:
+    """Upload an EPUB to the reader; returns the target host used."""
+    return upload_file(epub, host, dest_path, content_type="application/epub+zip")

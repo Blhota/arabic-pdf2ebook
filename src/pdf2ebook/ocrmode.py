@@ -188,6 +188,34 @@ def ocr_page_elements(page: OcrPage, keep_diacritics: bool,
     return final
 
 
+def _element_weight(el: Paragraph | PageImage) -> int:
+    """Approximate EPUB byte cost: an embedded scan ≈ 150k chars of text."""
+    return len(el.text) if isinstance(el, Paragraph) else 150_000
+
+
+# Readers struggle with giant chapter files (spec guidance ~300 KB/XHTML);
+# huge undetected-heading books can produce multi-megabyte chapters.
+MAX_CHAPTER_WEIGHT = 400_000
+TARGET_CHAPTER_WEIGHT = 250_000
+
+
+def _split_giant_chapters(chapters: list[Chapter]) -> list[Chapter]:
+    from .pipeline import _volume_chunks
+
+    out: list[Chapter] = []
+    for chapter in chapters:
+        weights = [_element_weight(el) for el in chapter.elements]
+        total = sum(weights)
+        if total <= MAX_CHAPTER_WEIGHT or len(chapter.elements) <= 3:
+            out.append(chapter)
+            continue
+        parts = max(2, round(total / TARGET_CHAPTER_WEIGHT))
+        for k, els in enumerate(_volume_chunks(chapter.elements, parts, weights)):
+            part_title = chapter.title if k == 0 else f"{chapter.title} ({k + 1})"
+            out.append(Chapter(part_title, els))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
@@ -381,9 +409,21 @@ def run_text_mode(
 
     if not chapters:
         chapters = [Chapter(title="", elements=[Paragraph("(لم يُتعرف على نص)", "p")])]
+    chapters = _split_giant_chapters(chapters)
     for i, chapter in enumerate(chapters):
         if not chapter.title:
             chapter.title = f"قسم {i + 1}"
+
+    # Optional final transform: bake letter-joining into the text for simple
+    # renderers (CrossPoint etc.). Must come after ALL other text processing.
+    if opts.preshape:
+        from .textproc.preshape import preshape_text
+
+        for chapter in chapters:
+            chapter.title = preshape_text(chapter.title)
+            for el in chapter.elements:
+                if isinstance(el, Paragraph):
+                    el.text = preshape_text(el.text)
 
     title = opts.meta.title or default_title(pdf_path)
     book = Book(title=title, author=opts.meta.author, language=opts.meta.language,
@@ -395,7 +435,9 @@ def run_text_mode(
     from .pipeline import _volume_chunks, _volume_path
 
     font_files = resolve_fonts(opts.font)
-    chunks = _volume_chunks(chapters, opts.split_volumes)
+    # Weight chapters by content so multi-volume splits come out even.
+    weights = [sum(_element_weight(el) for el in ch.elements) for ch in chapters]
+    chunks = _volume_chunks(chapters, opts.split_volumes, weights)
     for vol, chunk in enumerate(chunks):
         vol_title = title if len(chunks) == 1 else f"{title} — {vol + 1}"
         vol_out = _volume_path(out_path, vol, len(chunks))

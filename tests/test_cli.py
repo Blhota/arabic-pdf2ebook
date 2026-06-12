@@ -48,6 +48,19 @@ def test_convert_empty_pdf_fails_cleanly(tmp_path):
     assert "empty" in result.output.lower()
 
 
+def test_volume_chunks_balance_by_weight():
+    from pdf2ebook.pipeline import _volume_chunks
+
+    items = ["a", "b", "c", "d", "e"]
+    weights = [100, 100, 1000, 100, 100]  # one giant chapter in the middle
+    chunks = _volume_chunks(items, 3, weights)
+    assert [x for chunk in chunks for x in chunk] == items  # order preserved
+    assert 1 < len(chunks) <= 3
+    totals = [sum(weights[items.index(x)] for x in chunk) for chunk in chunks]
+    # no chunk should hold nearly everything while others are empty-ish
+    assert max(totals) <= 1200 and min(totals) >= 100
+
+
 def test_parse_page_range():
     assert parse_page_range("1-3", 10) == [0, 1, 2]
     assert parse_page_range("5", 10) == [4]

@@ -36,6 +36,12 @@ for free, with no cloud upload.
   browser. Everything still runs on your own computer.
 - **Wi-Fi send** — `pdf2ebook send book.epub` uploads straight to a
   [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) e-reader (Xteink X3/X4).
+- **Arabic font included, everywhere** — every EPUB embeds the Amiri font (phones, Apple
+  Books, Kobo render Arabic with zero setup). For readers with no Arabic support at all,
+  the font ships ready-to-install: `pdf2ebook fonts install --host <reader-ip>` puts it on a
+  CrossPoint reader over Wi-Fi (pair with `--preshape`), and `pdf2ebook fonts export` writes
+  a folder with the TTF + instructions for Kobo and others. Full per-device guide:
+  [docs/devices.md](docs/devices.md).
 
 ## 🚀 Quick start
 

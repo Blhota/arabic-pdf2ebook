@@ -72,6 +72,11 @@ def convert(
     style: str = typer.Option("gray", help="Image tone: gray | binary"),
     cbz: bool = typer.Option(False, "--cbz", help="Also write a CBZ (image mode)"),
     font: str = typer.Option("amiri", help="Embedded font: amiri | scheherazade | none"),
+    preshape: bool = typer.Option(
+        False, "--preshape",
+        help="Bake Arabic letter-joining into the text (presentation forms). ONLY for simple "
+             "readers like CrossPoint; normal readers (Kobo/Apple/phones) need it OFF.",
+    ),
     title: Optional[str] = typer.Option(None, help="EPUB title (default: from filename)"),
     author: Optional[str] = typer.Option(None, help="EPUB author"),
     strip_pattern: list[str] = typer.Option([], "--strip-pattern", help="Extra watermark regex (repeatable)"),
@@ -85,7 +90,7 @@ def convert(
         raise typer.Exit(2)
 
     opts = PipelineOptions(
-        mode=mode, text_layer=text_layer, dpi=dpi, pages=pages,
+        mode=mode, text_layer=text_layer, dpi=dpi, pages=pages, preshape=preshape,
         split_volumes=split_volumes, split_every=split_every,
         font=font, work_dir=work_dir, force=force, clean=clean,
         ocr=OcrOptions(engine=engine, lang=lang, psm=psm, min_conf=min_conf,
@@ -226,6 +231,40 @@ def send(
         console.print("Make sure the reader's Wi-Fi transfer mode is on and you are on the same network.")
         raise typer.Exit(1)
     console.print(f"[green]✔[/green] Uploaded {epub.name} to {target}")
+
+
+fonts_app = typer.Typer(help="Arabic font pack for readers without Arabic support.")
+app.add_typer(fonts_app, name="fonts")
+
+
+@fonts_app.command("export")
+def fonts_export(
+    dest: Path = typer.Argument(Path("pdf2ebook-fonts"), help="Folder to write the font pack into"),
+) -> None:
+    """Write ready-to-install Arabic fonts (TTF + CrossPoint cpfont) with instructions."""
+    from .fontkit import export_fonts
+
+    written = export_fonts(dest)
+    console.print(f"[green]✔[/green] Wrote {len(written)} files to {dest.resolve()}")
+    console.print("  Read README.txt inside for per-device instructions (AR/EN).")
+
+
+@fonts_app.command("install")
+def fonts_install(
+    host: Optional[str] = typer.Option(None, help="Reader IP, e.g. 192.168.1.50 (remembered)"),
+) -> None:
+    """Install the Arabic font on a CrossPoint e-reader over Wi-Fi (one time)."""
+    from .fontkit import install_fonts_on_reader
+
+    try:
+        used_host, count = install_fonts_on_reader(host)
+    except Exception as exc:
+        console.print(f"[red]Font install failed:[/red] {exc}")
+        console.print("Make sure the reader's Wi-Fi transfer mode is on and you are on the same network.")
+        raise typer.Exit(1)
+    console.print(f"[green]✔[/green] Installed {count} font files on {used_host}")
+    console.print("  On the reader: Settings → Reader → Font Family → Amiri")
+    console.print("  Convert books with --preshape so letters join correctly.")
 
 
 @app.command()

@@ -47,12 +47,36 @@ def default_title(pdf_path: Path) -> str:
     return title.strip(" -_") or pdf_path.stem
 
 
-def _volume_chunks(items: list, volumes: int) -> list[list]:
+def _volume_chunks(items: list, volumes: int, weights: list[int] | None = None) -> list[list]:
+    """Split items into ≤ `volumes` consecutive chunks balanced by weight.
+
+    Chapter sizes vary enormously (one chapter can hold half a book), so the
+    split walks the items greedily, starting a new chunk once the running
+    weight passes an equal share of the remaining total.
+    """
     volumes = max(1, volumes)
-    if volumes == 1:
+    if volumes == 1 or len(items) <= 1:
         return [items]
-    size = -(-len(items) // volumes)  # ceil division
-    return [items[i:i + size] for i in range(0, len(items), size)]
+    if weights is None:
+        weights = [1] * len(items)
+
+    chunks: list[list] = []
+    current: list = []
+    remaining_total = sum(weights)
+    remaining_volumes = volumes
+    current_weight = 0
+    for item, weight in zip(items, weights):
+        target = remaining_total / remaining_volumes if remaining_volumes else float("inf")
+        if current and remaining_volumes > 1 and current_weight + weight / 2 >= target:
+            chunks.append(current)
+            remaining_total -= current_weight
+            remaining_volumes -= 1
+            current, current_weight = [], 0
+        current.append(item)
+        current_weight += weight
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def _volume_path(out_path: Path, index: int, total: int) -> Path:

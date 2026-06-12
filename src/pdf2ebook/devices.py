@@ -26,7 +26,7 @@ PROFILES: dict[str, DeviceProfile] = {
     ),
     "xteink-x4": DeviceProfile(
         "xteink-x4", "Xteink X4 (CrossPoint)", 480, 800, 220,
-        "Small 4.2-inch screen; use --font none for OCR mode",
+        "For text mode: 'pdf2ebook fonts install' once + convert with --preshape",
     ),
     "kindle-pw11": DeviceProfile(
         "kindle-pw11", "Kindle Paperwhite 11", 1236, 1648, 300,

@@ -58,6 +58,7 @@ class EpubMeta:
 class PipelineOptions:
     mode: str = "auto"  # auto | ocr | image
     text_layer: str = "auto"  # auto (use when healthy) | always | never
+    preshape: bool = False  # bake letter-joining into text (simple readers only)
     dpi: int = 300
     pages: str | None = None
     split_volumes: int = 1

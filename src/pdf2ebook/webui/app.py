@@ -98,6 +98,7 @@ async def convert(
     engine: str = Form("tesseract"),
     split_volumes: int = Form(1),
     font: str = Form("amiri"),
+    preshape: bool = Form(False),
 ) -> JSONResponse:
     if mode not in ("auto", "ocr", "image"):
         raise HTTPException(400, "mode must be auto, ocr or image")
@@ -110,7 +111,7 @@ async def convert(
         shutil.copyfileobj(file.file, fh)
 
     opts = PipelineOptions(
-        mode=mode, split_volumes=max(1, split_volumes), font=font,
+        mode=mode, split_volumes=max(1, split_volumes), font=font, preshape=preshape,
         work_dir=job_root / "workdir",
         ocr=OcrOptions(engine=engine),
         image=ImageOptions(device=device),
@@ -148,6 +149,17 @@ def download(job_id: str, index: int) -> FileResponse:
         raise HTTPException(404, "unknown output")
     path = job.outputs[index]
     return FileResponse(path, filename=path.name, media_type="application/epub+zip")
+
+
+@app.post("/api/install-font")
+def install_font(host: str = Form("")) -> dict:
+    from ..fontkit import install_fonts_on_reader
+
+    try:
+        used_host, count = install_fonts_on_reader(host or None)
+    except Exception as exc:
+        raise HTTPException(502, f"Font install failed: {exc}") from exc
+    return {"ok": True, "host": used_host, "files": count}
 
 
 @app.post("/api/send")
