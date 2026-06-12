@@ -1,5 +1,5 @@
 # Session Context
-> Auto-saved by SessionEnd hook at 2026-06-11 22:21:25
+> Auto-saved by SessionEnd hook at 2026-06-12 09:49:46
 > Read by SessionStart hook to restore context after compaction or between sessions.
 
 ## Current Task
@@ -25,10 +25,11 @@ No staged changes
 
 ### Recent Commits
 ```
-227634f CI: test on macOS too (Windows/Linux/macOS matrix)
-68e75de Fix tessdata path handling and harden junk-line filtering
-520ec3a M2-M5: OCR/auto mode, web UI, Wi-Fi send, tests, docs, CI, packaging
-bd8069b M1: image-mode pipeline end-to-end
+8ece697 v0.1.2: CrossPoint Arabic support + self-service font pack
+081887c Fix UTF-8 BOM written into pyproject.toml by PowerShell Set-Content
+6982db2 Lint: remove unused import
+a60b918 Add classical poetry and Quranic quote handling (v0.1.1)
+44ad694 Add detailed Arabic README, screenshots, repo polish
 ```
 
 ## Notes

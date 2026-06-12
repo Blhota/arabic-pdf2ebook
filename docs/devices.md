@@ -35,17 +35,22 @@ CrossPoint's built-in fonts **contain no Arabic letters yet** (you will see boxe
 firmware doesn't join Arabic letters yet either. Until upstream support lands, this tool ships
 everything needed:
 
+**First time only — set up the reader (do this ONCE, never again):**
+
 ```
-# 1. convert the book with pre-joined letters (letters connected inside the text itself)
-pdf2ebook convert "كتابي.pdf" --preshape
-
-# 2. on the reader: enable Wi-Fi transfer mode (it shows an address like 192.168.1.50)
-
-# 3. one-time: install the Arabic font on the reader, then send the book
+# on the reader: enable Wi-Fi transfer mode (it shows an address like 192.168.1.50)
 pdf2ebook fonts install --host 192.168.1.50
-pdf2ebook send "كتابي.epub" --host 192.168.1.50
+# then on the reader: Settings → Reader → Font Family → Amiri
+```
 
-# 4. on the reader: Settings → Reader → Font Family → Amiri — then open the book
+The font stays on the reader's SD card permanently — you never reinstall it, no matter how
+many books you add. (Only exception: you delete it or swap SD cards.)
+
+**Every book after that — just two steps:**
+
+```
+pdf2ebook convert "كتابي.pdf" --preshape
+pdf2ebook send "كتابي.epub" --host 192.168.1.50
 ```
 
 The same buttons exist in the web page (`pdf2ebook ui`): the checkbox
