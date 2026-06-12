@@ -257,13 +257,16 @@ def fonts_install(
     from .fontkit import install_fonts_on_reader
 
     try:
-        used_host, count = install_fonts_on_reader(host)
+        used_host, count, method = install_fonts_on_reader(host)
     except Exception as exc:
         console.print(f"[red]Font install failed:[/red] {exc}")
         console.print("Make sure the reader's Wi-Fi transfer mode is on and you are on the same network.")
         raise typer.Exit(1)
     console.print(f"[green]✔[/green] Installed {count} font files on {used_host}")
-    console.print("  On the reader: Settings → Reader → Font Family → Amiri")
+    if method == "manual":
+        console.print("  [yellow]Restart the reader now[/yellow] (power off/on) so it finds the font.")
+        console.print("  أعد تشغيل القارئ الآن (إطفاء وتشغيل) ليتعرف على الخط.")
+    console.print("  Then on the reader: Settings → Reader → Font Family → Amiri")
     console.print("  Convert books with --preshape so letters join correctly.")
 
 

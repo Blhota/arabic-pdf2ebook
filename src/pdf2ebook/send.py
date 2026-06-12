@@ -86,7 +86,8 @@ def resolve_host(host: str | None) -> str:
 
 
 def upload_file(path: Path, host: str | None = None, dest_path: str = "/",
-                content_type: str = "application/octet-stream") -> str:
+                content_type: str = "application/octet-stream",
+                endpoint: str = "/upload") -> str:
     """Upload any file to the CrossPoint reader; returns the host used."""
     path = Path(path)
     if not path.exists():
@@ -94,7 +95,9 @@ def upload_file(path: Path, host: str | None = None, dest_path: str = "/",
     host = resolve_host(host)
 
     body, boundary = _multipart_body("file", path.name, path.read_bytes(), content_type)
-    url = f"http://{host}/upload?path={urllib.parse.quote(dest_path)}"
+    url = f"http://{host}{endpoint}"
+    if endpoint == "/upload":
+        url += f"?path={urllib.parse.quote(dest_path)}"
     request = urllib.request.Request(
         url, data=body, method="POST",
         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},

@@ -80,17 +80,32 @@ def export_fonts(dest: Path) -> list[Path]:
     return written
 
 
-def install_fonts_on_reader(host: str | None = None) -> tuple[str, int]:
-    """Upload the cpfont set to a CrossPoint reader's /.fonts/ over Wi-Fi."""
+def install_fonts_on_reader(host: str | None = None) -> tuple[str, int, str]:
+    """Install the cpfont set on a CrossPoint reader over Wi-Fi.
+
+    Tries the firmware's dedicated `/api/fonts/upload` endpoint first (stores
+    in the right family folder AND registers immediately). If that endpoint
+    misbehaves — older firmware, or the connection-reset bug seen on real
+    hardware — falls back to placing the files manually in
+    `/.fonts/<Family>/`, where the firmware registers them at next boot.
+
+    Returns (host, file_count, method) with method 'api' or 'manual'.
+    """
     from .send import mkdir_on_reader, upload_file
 
     files = cpfont_files()
     if not files:
         raise RuntimeError("No .cpfont files bundled with this installation.")
-    # The hidden fonts folder usually doesn't exist yet; the reader's upload
-    # handler does not create parent folders itself.
-    mkdir_on_reader(CROSSPOINT_FONT_PATH.strip("/"), host, parent="/")
     used_host = ""
+    try:
+        for f in files:
+            used_host = upload_file(f, host, endpoint="/api/fonts/upload")
+        return used_host, len(files), "api"
+    except RuntimeError:
+        pass  # any refusal/reset → manual SD layout below
+    family = files[0].stem.rsplit("_", 1)[0]
+    mkdir_on_reader(CROSSPOINT_FONT_PATH.strip("/"), host, parent="/")
+    mkdir_on_reader(family, host, parent=CROSSPOINT_FONT_PATH)
     for f in files:
-        used_host = upload_file(f, host, dest_path=CROSSPOINT_FONT_PATH)
-    return used_host, len(files)
+        used_host = upload_file(f, host, dest_path=f"{CROSSPOINT_FONT_PATH}/{family}")
+    return used_host, len(files), "manual"

@@ -156,10 +156,10 @@ def install_font(host: str = Form("")) -> dict:
     from ..fontkit import install_fonts_on_reader
 
     try:
-        used_host, count = install_fonts_on_reader(host or None)
+        used_host, count, method = install_fonts_on_reader(host or None)
     except Exception as exc:
         raise HTTPException(502, f"Font install failed: {exc}") from exc
-    return {"ok": True, "host": used_host, "files": count}
+    return {"ok": True, "host": used_host, "files": count, "restart_needed": method == "manual"}
 
 
 @app.post("/api/send")

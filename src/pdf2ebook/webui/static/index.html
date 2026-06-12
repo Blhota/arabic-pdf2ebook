@@ -219,7 +219,9 @@ document.getElementById('install-font').addEventListener('click', async () => {
   const res = await fetch('/api/install-font', { method: 'POST', body: fd });
   if (res.ok) {
     const data = await res.json();
-    statusEl.textContent = '✅ ثُبّت الخط (' + data.files + ' ملفات) — اختر Amiri من إعدادات القارئ';
+    statusEl.textContent = data.restart_needed
+      ? '✅ ثُبّت الخط (' + data.files + ' ملفات) — أعد تشغيل القارئ ثم اختر Amiri من الإعدادات — Restart the reader, then pick Amiri in settings'
+      : '✅ ثُبّت الخط (' + data.files + ' ملفات) — اختر Amiri من إعدادات القارئ';
   } else {
     statusEl.textContent = '❌ ' + (await res.json()).detail;
   }
