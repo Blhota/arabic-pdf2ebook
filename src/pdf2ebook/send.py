@@ -50,6 +50,35 @@ def _multipart_body(field: str, filename: str, data: bytes,
     return head + data + tail, boundary
 
 
+def _unreachable_message(host: str) -> str:
+    return (
+        f"Could not reach the reader at '{host}'. "
+        "On the reader, open Menu → File Transfer to turn on Wi-Fi mode — it shows an "
+        "address like 192.168.1.50 on its screen; enter that address and try again. | "
+        f"تعذر الوصول إلى القارئ على العنوان '{host}'. "
+        "افتح على القارئ: القائمة ← نقل الملفات لتشغيل وضع Wi-Fi — سيظهر عنوان مثل "
+        "192.168.1.50 على شاشته؛ اكتب ذلك العنوان وحاول مجددًا."
+    )
+
+
+def mkdir_on_reader(name: str, host: str | None = None, parent: str = "/") -> bool:
+    """Create a folder on the reader's SD card; returns False when the reader
+    refuses (e.g. it already exists), raises only when unreachable."""
+    host = resolve_host(host)
+    data = urllib.parse.urlencode({"name": name, "path": parent}).encode("utf-8")
+    request = urllib.request.Request(
+        f"http://{host}/mkdir", data=data, method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
+            return response.status == 200
+    except urllib.error.HTTPError:
+        return False  # most likely: already exists
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError(_unreachable_message(host)) from exc
+
+
 def resolve_host(host: str | None) -> str:
     config = load_config()
     host = (host or config.get("reader_host") or DEFAULT_HOST).strip()
@@ -74,15 +103,12 @@ def upload_file(path: Path, host: str | None = None, dest_path: str = "/",
         with urllib.request.urlopen(request, timeout=UPLOAD_TIMEOUT) as response:  # noqa: S310
             if response.status != 200:
                 raise RuntimeError(f"Reader answered HTTP {response.status}")
+    except urllib.error.HTTPError as exc:
+        # The reader answered — report what it actually said.
+        detail = exc.read().decode("utf-8", "replace")[:200]
+        raise RuntimeError(f"Reader refused the upload (HTTP {exc.code}): {detail}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise RuntimeError(
-            f"Could not reach the reader at '{host}'. "
-            "On the reader, open Menu → File Transfer to turn on Wi-Fi mode — it shows an "
-            "address like 192.168.1.50 on its screen; enter that address and try again. | "
-            f"تعذر الوصول إلى القارئ على العنوان '{host}'. "
-            "افتح على القارئ: القائمة ← نقل الملفات لتشغيل وضع Wi-Fi — سيظهر عنوان مثل "
-            "192.168.1.50 على شاشته؛ اكتب ذلك العنوان وحاول مجددًا."
-        ) from exc
+        raise RuntimeError(_unreachable_message(host)) from exc
 
     config = load_config()
     config["reader_host"] = host

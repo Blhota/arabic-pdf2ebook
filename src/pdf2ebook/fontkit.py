@@ -82,11 +82,14 @@ def export_fonts(dest: Path) -> list[Path]:
 
 def install_fonts_on_reader(host: str | None = None) -> tuple[str, int]:
     """Upload the cpfont set to a CrossPoint reader's /.fonts/ over Wi-Fi."""
-    from .send import upload_file
+    from .send import mkdir_on_reader, upload_file
 
     files = cpfont_files()
     if not files:
         raise RuntimeError("No .cpfont files bundled with this installation.")
+    # The hidden fonts folder usually doesn't exist yet; the reader's upload
+    # handler does not create parent folders itself.
+    mkdir_on_reader(CROSSPOINT_FONT_PATH.strip("/"), host, parent="/")
     used_host = ""
     for f in files:
         used_host = upload_file(f, host, dest_path=CROSSPOINT_FONT_PATH)
