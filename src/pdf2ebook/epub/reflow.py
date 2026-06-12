@@ -22,8 +22,12 @@ def _chapter_xhtml(chapter: Chapter, work_root: Path, image_names: dict[int, str
     parts: list[str] = []
     for el in chapter.elements:
         if isinstance(el, Paragraph):
-            tag = "h2" if el.kind == "h2" else "p"
-            parts.append(f"    <{tag}>{escape(el.text)}</{tag}>")
+            if el.kind == "h2":
+                parts.append(f"    <h2>{escape(el.text)}</h2>")
+            elif el.kind in ("verse", "quran"):
+                parts.append(f'    <p class="{el.kind}">{escape(el.text)}</p>')
+            else:
+                parts.append(f"    <p>{escape(el.text)}</p>")
         elif isinstance(el, PageImage):
             name = image_names[el.page_no]
             parts.append(

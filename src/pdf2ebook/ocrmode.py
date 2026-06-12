@@ -27,7 +27,7 @@ from .pdfio import PdfRasterizer
 from .pipeline import ConversionResult, Progress, default_title, default_work_dir, extract_pages
 from .preprocess import ops
 from .preprocess.pipeline import detect_image_page, preprocess_for_image, preprocess_for_ocr
-from .textproc import clean
+from .textproc import clean, poetry
 from .textproc.chapters import detect_heading_lines, looks_like_heading_text
 from .textproc.paragraphs import TERMINAL_PUNCT, merge_page_boundary, page_paragraphs
 from .workdir import WorkDir
@@ -138,19 +138,54 @@ def ocr_page_elements(page: OcrPage, keep_diacritics: bool,
                              i < 2 or i >= len(visible) - 2)]
     filtered = OcrPage(page_no=page.page_no, size=page.size, lines=kept)
 
-    heading_idx = set(detect_heading_lines(filtered))
-    heading_texts = {clean.normalize_arabic(filtered.lines[i].text, keep_diacritics)
-                     for i in heading_idx}
+    # Poetry blocks keep one bayt per line; everything else flows as prose.
+    verse_idx = poetry.detect_verse_lines(filtered)
     out: list[tuple[str, str]] = []
-    for par in page_paragraphs(filtered):
-        normalized = clean.normalize_arabic(par, keep_diacritics)
-        if not normalized:
+    i = 0
+    while i < len(filtered.lines):
+        if i in verse_idx:
+            j = i
+            while j < len(filtered.lines) and j in verse_idx:
+                text = clean.normalize_arabic(poetry.verse_text(filtered.lines[j]),
+                                              keep_diacritics)
+                if text:
+                    out.append(("verse", text))
+                j += 1
+            i = j
             continue
-        is_heading = normalized in heading_texts or (
-            len(normalized.split()) <= 8 and looks_like_heading_text(normalized)
-        )
-        out.append(("h2" if is_heading else "p", normalized))
-    return out
+        j = i
+        while j < len(filtered.lines) and j not in verse_idx:
+            j += 1
+        prose = OcrPage(page_no=page.page_no, size=page.size, lines=filtered.lines[i:j])
+        heading_idx = set(detect_heading_lines(prose))
+        heading_texts = {clean.normalize_arabic(prose.lines[k].text, keep_diacritics)
+                         for k in heading_idx}
+        for par in page_paragraphs(prose):
+            normalized = clean.normalize_arabic(par, keep_diacritics)
+            if not normalized:
+                continue
+            is_heading = normalized in heading_texts or (
+                len(normalized.split()) <= 8 and looks_like_heading_text(normalized)
+            )
+            out.append(("h2" if is_heading else "p", normalized))
+        i = j
+
+    # Quranic quotes: restore ornate brackets when a citation cue is adjacent,
+    # and honour explicit attribution lines like 'قرآن كريم' beneath a quote.
+    final: list[tuple[str, str]] = []
+    for n, (kind, text) in enumerate(out):
+        if kind == "p":
+            next_text = out[n + 1][1] if n + 1 < len(out) else ""
+            if poetry.QURAN_ATTRIBUTION_RE.match(next_text):
+                final.append(("quran", poetry.attributed_quran(text)))
+                continue
+            window = " ".join(t for _, t in out[max(0, n - 1): n + 2])
+            has_cue = bool(poetry.QURAN_CUE_RE.search(window))
+            text, dominated = poetry.mark_quran(text, has_cue)
+            if dominated:
+                kind = "quran"
+        final.append((kind, text))
+    return final
 
 
 # ---------------------------------------------------------------------------

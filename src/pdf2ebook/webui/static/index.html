@@ -34,6 +34,9 @@
   .warn { background: #fff3cd; border: 1px solid #ffe08a; border-radius: 8px;
           padding: 0.6rem 0.8rem; font-size: 0.88rem; margin-top: 0.8rem; display: none; }
   .small { font-size: 0.8rem; color: #777; }
+  .hint { font-size: 0.78rem; color: #777; margin-top: 0.25rem; line-height: 1.45; }
+  .field.disabled { opacity: 0.45; }
+  .field.disabled select { pointer-events: none; }
   footer { text-align: center; margin-top: 1.2rem; font-size: 0.8rem; color: #999; }
 </style>
 </head>
@@ -57,9 +60,10 @@
           <option value="auto">نص (OCR) — Text, resizable</option>
           <option value="image">صور محسّنة — Cleaned page images</option>
         </select>
+        <div class="hint" id="mode-hint"></div>
       </div>
-      <div class="field">
-        <label>الجهاز — Device (image mode)</label>
+      <div class="field" id="device-field">
+        <label>الجهاز — Device</label>
         <select id="device">
           <option value="generic-6in">Generic 6-inch</option>
           <option value="generic-6in-hd">Generic 6-inch HD</option>
@@ -67,10 +71,12 @@
           <option value="kindle-pw11">Kindle Paperwhite 11</option>
           <option value="none">Original size</option>
         </select>
+        <div class="hint">يُستخدم في وضع الصور فقط لتحديد مقاس الصفحة لشاشة قارئك — Only used in image mode; sets page size for your e-reader screen</div>
       </div>
       <div class="field">
         <label>تقسيم لمجلدات — Split volumes</label>
         <input id="volumes" type="number" min="1" max="20" value="1"/>
+        <div class="hint">قسّم الكتب الكبيرة إلى عدة ملفات EPUB — Split large books into several EPUB files</div>
       </div>
     </div>
 
@@ -109,6 +115,20 @@ const stageNames = {
   epub: 'بناء الكتاب — Building EPUB',
   starting: 'جارٍ البدء — Starting'
 };
+
+const modeHints = {
+  auto: 'يحوّل الصفحات إلى نص قابل لتغيير الحجم والبحث (يستخدم OCR عند الحاجة)، مناسب للروايات والنثر — Converts pages to resizable, searchable text (OCR when needed). Best for prose.',
+  image: 'يحافظ على شكل الصفحة الأصلي كصور منظّفة، مناسب للجداول والرسوم — Keeps the original page layout as cleaned images. Best for tables and diagrams.'
+};
+const modeSelect = document.getElementById('mode');
+function updateModeUI() {
+  const mode = modeSelect.value;
+  document.getElementById('mode-hint').textContent = modeHints[mode];
+  document.getElementById('device-field').classList.toggle('disabled', mode !== 'image');
+  document.getElementById('device').disabled = mode !== 'image';
+}
+modeSelect.addEventListener('change', updateModeUI);
+updateModeUI();
 
 fetch('/api/status').then(r => r.json()).then(s => {
   const t = s.engines.tesseract;
