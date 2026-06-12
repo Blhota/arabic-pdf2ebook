@@ -73,15 +73,27 @@ def build_reflow_epub(
             epub.add_file(f"OEBPS/fonts/{font.name}", font)
         epub.add("OEBPS/styles/style.css", css)
 
-        # Collect and embed all scan images referenced by the book.
+        # Collect and embed all scan images referenced by the book. The scan
+        # of the book's first page (the cover, when kept as an image) is
+        # declared as the EPUB cover so readers show a thumbnail.
         image_names: dict[int, str] = {}
+        cover_id: str | None = None
+        first_image_page = min(
+            (el.page_no for ch in book.chapters for el in ch.elements
+             if isinstance(el, PageImage)), default=None,
+        )
         for chapter in book.chapters:
             for el in chapter.elements:
                 if isinstance(el, PageImage) and el.page_no not in image_names:
                     src = work_root / el.image_path
                     name = f"images/scan_{el.page_no + 1:04d}.jpg"
+                    item_id = f"scan{el.page_no + 1:04d}"
+                    is_cover = el.page_no == first_image_page and el.page_no <= 1
+                    if is_cover:
+                        cover_id = item_id
                     epub.add(f"OEBPS/{name}", _encode_scan(src))
-                    items.append(ManifestItem(f"scan{el.page_no + 1:04d}", name, "image/jpeg"))
+                    items.append(ManifestItem(item_id, name, "image/jpeg",
+                                              "cover-image" if is_cover else ""))
                     image_names[el.page_no] = name
 
         for i, chapter in enumerate(book.chapters):
@@ -100,5 +112,6 @@ def build_reflow_epub(
         epub.add("OEBPS/nav.xhtml", build_nav(book.title, book.language, toc))
         epub.add("OEBPS/toc.ncx", build_ncx(book.title, book_id, toc))
         epub.add("OEBPS/content.opf",
-                 build_opf(book.title, book.author, book.language, items, spine_ids, book_id=book_id))
+                 build_opf(book.title, book.author, book.language, items, spine_ids,
+                           book_id=book_id, cover_id=cover_id))
     return out_path

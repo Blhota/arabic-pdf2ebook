@@ -103,6 +103,30 @@ def compile_extra_patterns(patterns: list[str]) -> list[re.Pattern]:
 
 
 _ARABIC_LETTER_RE = re.compile(r"[ء-ي٠-٩]")
+_ARABIC_ONLY_RE = re.compile(r"[ء-ي]")
+
+
+def arabic_ratio(text: str) -> float:
+    """Share of Arabic letters among non-space characters."""
+    compact = re.sub(r"\s+", "", text)
+    if not compact:
+        return 0.0
+    return len(_ARABIC_ONLY_RE.findall(compact)) / len(compact)
+
+
+def clean_heading(text: str) -> str:
+    """Tidy an OCR'd chapter heading for use as a TOC label.
+
+    OCR splits the definite article off words ('ا لإسلامي') and misreads
+    section numerals as ASCII punctuation ('١" -'); headings are the most
+    user-visible text in the book, so they get extra polish.
+    """
+    text = re.sub(r"\bا\s+ل(?=[ء-ي])", "ال", text)  # rejoin split alef-lam
+    text = re.sub(r"['\"`*_|<>}{\\\\]+", " ", text)  # ASCII debris never belongs in a heading
+    # Strip leading section numbering / separators (often misread anyway).
+    text = re.sub(r"^[\s0-9٠-٩ـ\-–—.,:;)(‎‏]+", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" -–—ـ")
+    return text.strip()
 
 
 def is_junk_line(line: str, edge: bool = False) -> bool:

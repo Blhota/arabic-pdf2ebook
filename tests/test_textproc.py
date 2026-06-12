@@ -54,6 +54,24 @@ def test_junk_line_catches_mangled_watermark_at_page_edge():
     assert not clean.is_junk_line("مقدمة", edge=True)
 
 
+def test_clean_heading_fixes_ocr_defects():
+    # split alef-lam rejoined
+    assert clean.clean_heading("من الفتح ا لإسلامي إلى سقوط غرناطة") == "من الفتح الإسلامي إلى سقوط غرناطة"
+    # stray ASCII quote + leading misread numbering stripped
+    assert clean.clean_heading('١" - سجون التفتيش بإسبانيا') == "سجون التفتيش بإسبانيا"
+    # leading section number + tatweel separator stripped
+    assert clean.clean_heading("٣ ـ اضطهادات المسلمين ونفيهم") == "اضطهادات المسلمين ونفيهم"
+    # already-clean heading untouched
+    assert clean.clean_heading("بنو الأحمر") == "بنو الأحمر"
+
+
+def test_arabic_ratio_separates_arabic_from_latin_glyph_soup():
+    assert clean.arabic_ratio("وكان المسلمون بالأندلس يستنجدون بسلاطين المغرب") > 0.8
+    assert clean.arabic_ratio("Histoire Critique de l'Inquisition d'Espagne 1923") < 0.2
+    mixed_garbage = "0ا 5ب8 ÷ل .. 7ك9 xx ها 3" * 5
+    assert clean.arabic_ratio(mixed_garbage) < 0.6
+
+
 def test_looks_corrupted_arabic_detects_broken_lam_alef():
     broken = "وأنت الخر ل شيء بعدك وأنت الفردا ل شريك لك السإلمية يا واهب العقول " * 10
     healthy = "وكان المسلمون بالأندلس يستنجدون بسلاطين المغرب كلما اشتد ضغط الإسبانيين عليهم " * 10

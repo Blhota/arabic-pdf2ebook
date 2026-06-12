@@ -25,6 +25,7 @@ def build_opf(
     book_id: str | None = None,
     pre_paginated: bool = False,
     viewport: tuple[int, int] | None = None,
+    cover_id: str | None = None,
 ) -> str:
     book_id = book_id or f"urn:uuid:{uuid.uuid4()}"
     modified = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -36,6 +37,9 @@ def build_opf(
             '    <meta property="rendition:orientation">portrait</meta>\n'
             '    <meta property="rendition:spread">none</meta>\n'
         )
+    if cover_id:
+        # EPUB 2 fallback; EPUB 3 readers use the cover-image manifest property.
+        meta_extra += f'    <meta name="cover" content="{escape(cover_id)}"/>\n'
 
     manifest_lines = []
     for item in items:

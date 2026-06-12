@@ -77,7 +77,8 @@ def build_image_epub(
 
             img_id, page_id = f"img{i + 1:04d}", f"p{i + 1:04d}"
             props = "rendition:layout-pre-paginated" if pre_paginated else ""
-            items.append(ManifestItem(img_id, img_name, media_type))
+            items.append(ManifestItem(img_id, img_name, media_type,
+                                      "cover-image" if i == 0 else ""))
             items.append(ManifestItem(page_id, page_name, "application/xhtml+xml", props))
             spine_ids.append(page_id)
 
@@ -97,6 +98,7 @@ def build_image_epub(
         epub.add(
             "OEBPS/content.opf",
             build_opf(title, author, language, items, spine_ids, book_id=book_id,
-                      pre_paginated=pre_paginated, viewport=viewport),
+                      pre_paginated=pre_paginated, viewport=viewport,
+                      cover_id="img0001" if page_paths else None),
         )
     return out_path

@@ -170,6 +170,8 @@ def run_text_mode(
     with PdfRasterizer(pdf_path) as pdf:
         indices = parse_page_range(opts.pages, pdf.page_count)
         result.pages_total = len(indices)
+        if not opts.meta.author:
+            opts.meta.author = pdf.metadata().get("author", "")
         force_extract = opts.force in ("extract", "all")
         raw_paths = extract_pages(pdf, work, indices, opts.dpi, force_extract, progress)
         raw_by_index = dict(zip(indices, raw_paths))
@@ -243,6 +245,14 @@ def run_text_mode(
         good = (ocr_page.mean_conf >= opts.ocr.min_conf
                 and ocr_page.word_count >= MIN_WORDS_PER_PAGE)
         if good:
+            # Foreign-script pages (Latin bibliographies, dot-leader indexes)
+            # OCR into glyph soup under an Arabic model — keep them as images.
+            # Calibrated on real books: genuine Arabic pages score >= 0.74,
+            # an OCR'd French bibliography scored 0.60.
+            page_text = " ".join(ln.text for ln in ocr_page.lines)
+            if clean.arabic_ratio(page_text) < 0.65:
+                good = False
+        if good:
             pages_data.append(PageData(index=idx, kind="ocr", payload=ocr_page,
                                        mean_conf=ocr_page.mean_conf))
             result.pages_ocr += 1
@@ -311,9 +321,22 @@ def run_text_mode(
         else:
             for kind, text in data.elements:
                 if kind == "h2" and use_headings:
-                    flush()
-                    current.title = text
-                    current.elements.append(Paragraph(text, "h2"))
+                    # Two-line headings arrive as consecutive h2 elements:
+                    # merge them into one chapter title instead of opening an
+                    # empty chapter per line.
+                    only_heading_so_far = (
+                        len(current.elements) == 1
+                        and isinstance(current.elements[0], Paragraph)
+                        and current.elements[0].kind == "h2"
+                    )
+                    if only_heading_so_far:
+                        merged = f"{current.elements[0].text} {text}".strip()
+                        current.elements[0] = Paragraph(merged, "h2")
+                        current.title = clean.clean_heading(merged) or current.title
+                    else:
+                        flush()
+                        current.title = clean.clean_heading(text) or text
+                        current.elements.append(Paragraph(text, "h2"))
                 else:
                     current.elements.append(Paragraph(text, kind))
         pages_in_chapter += 1

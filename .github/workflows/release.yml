@@ -10,6 +10,10 @@ permissions:
 
 jobs:
   pypi:
+    # Requires one-time setup: add this repo as a "trusted publisher" for the
+    # arabic-pdf2ebook project on pypi.org. Until then this job fails politely
+    # without blocking the Windows exe build.
+    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
