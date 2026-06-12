@@ -2,7 +2,15 @@
 
 **Convert scanned Arabic PDF books into EPUBs you can actually read on any e-reader.**
 
-تحويل كتب PDF العربية الممسوحة ضوئيًا إلى كتب EPUB يمكن قراءتها على أي قارئ إلكتروني.
+<div dir="rtl">
+
+**🇸🇦 اقرأ الدليل الكامل بالعربية: [README.ar.md](README.ar.md)**
+
+</div>
+
+| Before: scanned PDF page | After: real resizable text | The local web page |
+|---|---|---|
+| ![scanned page](docs/images/before-scan.png) | ![EPUB text](docs/images/after-text.png) | ![web UI](docs/images/webui.png) |
 
 Old scanned Arabic books (from Noor-Book, kotob.has.it, archive.org…) are image-only PDFs:
 on a small e-reader the text is tiny, blurry, and can't be resized. This tool fixes that — locally,
