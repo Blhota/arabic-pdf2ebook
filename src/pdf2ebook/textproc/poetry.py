@@ -15,7 +15,6 @@ EPUB styles it distinctly.
 from __future__ import annotations
 
 import re
-from statistics import median
 
 from ..ocr.base import OcrLine, OcrPage
 
