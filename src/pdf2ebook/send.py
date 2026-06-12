@@ -70,9 +70,19 @@ def upload_file(path: Path, host: str | None = None, dest_path: str = "/",
         url, data=body, method="POST",
         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
     )
-    with urllib.request.urlopen(request, timeout=UPLOAD_TIMEOUT) as response:  # noqa: S310
-        if response.status != 200:
-            raise RuntimeError(f"Reader answered HTTP {response.status}")
+    try:
+        with urllib.request.urlopen(request, timeout=UPLOAD_TIMEOUT) as response:  # noqa: S310
+            if response.status != 200:
+                raise RuntimeError(f"Reader answered HTTP {response.status}")
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError(
+            f"Could not reach the reader at '{host}'. "
+            "On the reader, open Menu → File Transfer to turn on Wi-Fi mode — it shows an "
+            "address like 192.168.1.50 on its screen; enter that address and try again. | "
+            f"تعذر الوصول إلى القارئ على العنوان '{host}'. "
+            "افتح على القارئ: القائمة ← نقل الملفات لتشغيل وضع Wi-Fi — سيظهر عنوان مثل "
+            "192.168.1.50 على شاشته؛ اكتب ذلك العنوان وحاول مجددًا."
+        ) from exc
 
     config = load_config()
     config["reader_host"] = host
