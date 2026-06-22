@@ -83,6 +83,9 @@ def convert(
     work_dir: Optional[Path] = typer.Option(None, help="Cache directory (default: <book>.workdir)"),
     force: Optional[str] = typer.Option(None, help="Recompute stage: extract | preprocess | ocr | all"),
     clean: bool = typer.Option(False, help="Delete the work dir after a successful conversion"),
+    debug_markdown: Optional[Path] = typer.Option(
+        None, "--debug-markdown", hidden=True,
+        help="Write the internal Markdown to this path for inspection (debug only)"),
 ) -> None:
     """Convert a PDF book to EPUB."""
     if mode not in ("auto", "ocr", "image"):
@@ -93,6 +96,7 @@ def convert(
         mode=mode, text_layer=text_layer, dpi=dpi, pages=pages, preshape=preshape,
         split_volumes=split_volumes, split_every=split_every,
         font=font, work_dir=work_dir, force=force, clean=clean,
+        debug_markdown=debug_markdown,
         ocr=OcrOptions(engine=engine, lang=lang, psm=psm, min_conf=min_conf,
                        rescue=rescue, strip_patterns=list(strip_pattern)),
         image=ImageOptions(device=device, width=width, height=height, style=style,

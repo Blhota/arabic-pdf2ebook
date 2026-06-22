@@ -16,6 +16,8 @@ h1, h2, h3 { text-align: center; font-weight: bold; }
 p { margin: 0 0 0.4em 0; text-indent: 1em; }
 p.verse { text-align: center; text-indent: 0; margin: 0 0 0.15em 0; }
 p.quran { text-align: center; text-indent: 0; margin: 0.5em 1em; }
+ul, ol { margin: 0.3em 0; padding-inline-start: 1.5em; }
+li { margin: 0 0 0.2em 0; }
 figure.scan { margin: 0.5em 0; page-break-inside: avoid; text-align: center; }
 figure.scan img { max-width: 100%; }
 figure.scan figcaption { font-size: 0.8em; color: #555; }

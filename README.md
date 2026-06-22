@@ -21,6 +21,9 @@ for free, with no cloud upload.
 - **Text mode (OCR)** — recognizes the Arabic text and builds a *reflowable* right-to-left EPUB:
   resizable text, embedded Amiri font, correct RTL page turning, table of contents,
   automatic removal of watermarks (`http://kotob.has.it/` …) and page numbers.
+- **Neat structure** — every page (OCR *or* the PDF's own text layer) is reconstructed into clean
+  Markdown internally — headings detected by font size, paragraphs rejoined, bullet/numbered lists
+  preserved — and then turned into the EPUB. Books with a real text layer come out especially tidy.
 - **Classical poetry & Quranic quotes** — rhymed verse blocks (قصائد) are detected and kept
   one بيت per centered line instead of being flattened into prose; Quranic quotes get their
   ornate brackets ﴿…﴾ restored and distinct styling when the book marks them (قرآن كريم, سورة…).

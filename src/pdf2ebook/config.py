@@ -67,6 +67,7 @@ class PipelineOptions:
     work_dir: Path | None = None
     force: str | None = None  # extract | preprocess | ocr | all
     clean: bool = False
+    debug_markdown: Path | None = None  # write the in-memory Markdown here (debug only)
     ocr: OcrOptions = field(default_factory=OcrOptions)
     image: ImageOptions = field(default_factory=ImageOptions)
     meta: EpubMeta = field(default_factory=EpubMeta)

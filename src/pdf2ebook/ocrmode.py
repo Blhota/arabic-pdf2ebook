@@ -27,9 +27,10 @@ from .pdfio import PdfRasterizer
 from .pipeline import ConversionResult, Progress, default_title, default_work_dir, extract_pages
 from .preprocess import ops
 from .preprocess.pipeline import detect_image_page, preprocess_for_image, preprocess_for_ocr
-from .textproc import clean, poetry
-from .textproc.chapters import detect_heading_lines, looks_like_heading_text
-from .textproc.paragraphs import TERMINAL_PUNCT, merge_page_boundary, page_paragraphs
+from .textproc import clean
+from .textproc.markdownize import emit_elements, emit_page_break, emit_scan, markdown_to_book
+from .textproc.paragraphs import merge_page_boundary
+from .textproc.structure import structure_page
 from .workdir import WorkDir
 
 TEXT_LAYER_MIN_CHARS = 200
@@ -43,16 +44,14 @@ DropLine = Callable[[str, bool], bool]  # (line_text, is_page_edge) -> drop?
 class PageData:
     index: int
     kind: str  # "text" | "ocr" | "image"
-    payload: object = None  # OcrPage | str | None
-    elements: list[tuple[str, str]] = field(default_factory=list)  # (p|h2, text)
+    payload: object = None  # OcrPage | None (text + ocr pages both carry an OcrPage)
+    elements: list[tuple[str, str]] = field(default_factory=list)  # (kind, text)
     image_rel: str | None = None
     mean_conf: float = 100.0
 
     def line_texts(self) -> list[str]:
-        if self.kind == "ocr":
+        if self.kind in ("ocr", "text") and self.payload is not None:
             return [ln.text for ln in self.payload.lines if ln.text.strip()]
-        if self.kind == "text":
-            return [ln for ln in str(self.payload).splitlines() if ln.strip()]
         return []
 
 
@@ -106,86 +105,19 @@ def _make_scan_image(work: WorkDir, raw_path: Path, index: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Page content → (kind, text) elements, with line-level junk filtering
+# Chapter weighting / giant-chapter splitting
 # ---------------------------------------------------------------------------
 
-def direct_text_elements(text: str, drop_line: DropLine) -> list[tuple[str, str]]:
-    raw_lines = [clean.normalize_arabic(ln) for ln in text.splitlines()]
-    raw_lines = [ln for ln in raw_lines if ln]
-    lines = [ln for i, ln in enumerate(raw_lines)
-             if not drop_line(ln, i < 2 or i >= len(raw_lines) - 2)]
-    paragraphs: list[str] = []
-    buffer: list[str] = []
-    for line in lines:
-        buffer.append(line)
-        if line and line[-1] in TERMINAL_PUNCT:
-            paragraphs.append(" ".join(buffer))
-            buffer = []
-    if buffer:
-        paragraphs.append(" ".join(buffer))
-    out: list[tuple[str, str]] = []
-    for par in paragraphs:
-        kind = "h2" if looks_like_heading_text(par) else "p"
-        out.append((kind, par))
-    return out
+def _modal_body_size(pages: dict[int, OcrPage]) -> float:
+    """Most common line font size across text-layer pages (anchors heading tiers)."""
+    from collections import Counter
 
-
-def ocr_page_elements(page: OcrPage, keep_diacritics: bool,
-                      drop_line: DropLine) -> list[tuple[str, str]]:
-    visible = [ln for ln in page.lines if ln.text.strip()]
-    kept = [ln for i, ln in enumerate(visible)
-            if not drop_line(clean.normalize_arabic(ln.text, keep_diacritics),
-                             i < 2 or i >= len(visible) - 2)]
-    filtered = OcrPage(page_no=page.page_no, size=page.size, lines=kept)
-
-    # Poetry blocks keep one bayt per line; everything else flows as prose.
-    verse_idx = poetry.detect_verse_lines(filtered)
-    out: list[tuple[str, str]] = []
-    i = 0
-    while i < len(filtered.lines):
-        if i in verse_idx:
-            j = i
-            while j < len(filtered.lines) and j in verse_idx:
-                text = clean.normalize_arabic(poetry.verse_text(filtered.lines[j]),
-                                              keep_diacritics)
-                if text:
-                    out.append(("verse", text))
-                j += 1
-            i = j
-            continue
-        j = i
-        while j < len(filtered.lines) and j not in verse_idx:
-            j += 1
-        prose = OcrPage(page_no=page.page_no, size=page.size, lines=filtered.lines[i:j])
-        heading_idx = set(detect_heading_lines(prose))
-        heading_texts = {clean.normalize_arabic(prose.lines[k].text, keep_diacritics)
-                         for k in heading_idx}
-        for par in page_paragraphs(prose):
-            normalized = clean.normalize_arabic(par, keep_diacritics)
-            if not normalized:
-                continue
-            is_heading = normalized in heading_texts or (
-                len(normalized.split()) <= 8 and looks_like_heading_text(normalized)
-            )
-            out.append(("h2" if is_heading else "p", normalized))
-        i = j
-
-    # Quranic quotes: restore ornate brackets when a citation cue is adjacent,
-    # and honour explicit attribution lines like 'قرآن كريم' beneath a quote.
-    final: list[tuple[str, str]] = []
-    for n, (kind, text) in enumerate(out):
-        if kind == "p":
-            next_text = out[n + 1][1] if n + 1 < len(out) else ""
-            if poetry.QURAN_ATTRIBUTION_RE.match(next_text):
-                final.append(("quran", poetry.attributed_quran(text)))
-                continue
-            window = " ".join(t for _, t in out[max(0, n - 1): n + 2])
-            has_cue = bool(poetry.QURAN_CUE_RE.search(window))
-            text, dominated = poetry.mark_quran(text, has_cue)
-            if dominated:
-                kind = "quran"
-        final.append((kind, text))
-    return final
+    counts: Counter[int] = Counter()
+    for page in pages.values():
+        for ln in page.lines:
+            if ln.size > 0 and ln.text.strip():
+                counts[round(ln.size)] += 1
+    return float(counts.most_common(1)[0][0]) if counts else 0.0
 
 
 def _element_weight(el: Paragraph | PageImage) -> int:
@@ -240,24 +172,36 @@ def run_text_mode(
         raw_by_index = dict(zip(indices, raw_paths))
 
         # 1. Which pages can use the PDF's own text layer? (auto mode only)
-        direct_text: dict[int, str] = {}
+        #    Kept pages are extracted *with geometry* (an OcrPage with per-line
+        #    font sizes) so they get the same structuring as OCR pages.
+        direct_pages: dict[int, OcrPage] = {}
         if opts.mode == "auto" and opts.text_layer != "never":
+            samples: dict[int, str] = {}
             for idx in indices:
-                text = pdf.extract_text(idx)
-                stripped = text.strip()
+                stripped = pdf.extract_text(idx).strip()
                 if len(stripped) >= TEXT_LAYER_MIN_CHARS:
-                    direct_text[idx] = stripped
+                    samples[idx] = stripped
+            use_layer = bool(samples)
             # Quality gate: many scanned books embed a *broken* text layer
             # (lam-alef ligatures lose the alef, hamza forms scramble).
             # When the sampled text looks corrupted, ignore the whole layer
             # and OCR instead — unless the user forces --text-layer always.
-            if direct_text and opts.text_layer == "auto":
-                sample = "\n".join(list(direct_text.values())[:10])
+            if use_layer and opts.text_layer == "auto":
+                sample = "\n".join(list(samples.values())[:10])
                 if clean.looks_corrupted_arabic(sample):
-                    direct_text.clear()
+                    use_layer = False
+            if use_layer:
+                for idx in samples:
+                    page = pdf.extract_text_page(idx)
+                    if page and page.lines:
+                        direct_pages[idx] = page
+
+    # Body font size (the modal line size across text-layer pages) anchors the
+    # heading tiers; OCR pages have no font size and fall back to line height.
+    body_size = _modal_body_size(direct_pages)
 
     # 2. Recognition pass: text layer / OCR / image per page.
-    ocr_indices = [i for i in indices if i not in direct_text]
+    ocr_indices = [i for i in indices if i not in direct_pages]
     force_pre = opts.force in ("preprocess", "all") or force_extract
     pre_paths = preprocess_ocr_pages(
         work, [raw_by_index[i] for i in ocr_indices], force_pre, progress
@@ -275,8 +219,8 @@ def run_text_mode(
     rescue_threshold = opts.ocr.min_conf + 15
 
     for n, idx in enumerate(indices):
-        if idx in direct_text:
-            pages_data.append(PageData(index=idx, kind="text", payload=direct_text[idx]))
+        if idx in direct_pages:
+            pages_data.append(PageData(index=idx, kind="text", payload=direct_pages[idx]))
             result.pages_direct_text += 1
             continue
 
@@ -344,10 +288,9 @@ def run_text_mode(
         return bool(repeated) and clean.matches_repeated(text, repeated)
 
     for data in pages_data:
-        if data.kind == "ocr":
-            data.elements = ocr_page_elements(data.payload, opts.ocr.keep_diacritics, drop_line)
-        elif data.kind == "text":
-            data.elements = direct_text_elements(str(data.payload), drop_line)
+        if data.kind in ("ocr", "text"):
+            data.elements = structure_page(data.payload, opts.ocr.keep_diacritics,
+                                           drop_line, body_size)
 
     # 4. Merge paragraphs across page boundaries.
     for prev, cur in zip(pages_data, pages_data[1:]):
@@ -364,70 +307,42 @@ def run_text_mode(
             prev.elements[-1] = ("p", merged_prev[-1])
             cur.elements.pop(0)
 
-    # 5. Chapter assembly.
-    heading_count = sum(1 for p in pages_data for k, _ in p.elements if k == "h2")
-    chapters: list[Chapter] = []
-    current = Chapter(title="")
-    pages_in_chapter = 0
-    use_headings = heading_count >= 2
-
-    def flush() -> None:
-        nonlocal current, pages_in_chapter
-        if current.elements:
-            chapters.append(current)
-        current = Chapter(title="")
-        pages_in_chapter = 0
-
+    # 5. Serialize the structured pages to an in-memory Markdown document, then
+    #    parse it back into the Book model (PDF → Markdown → EPUB). The Markdown
+    #    is never written to disk unless --debug-markdown is set.
+    md_lines: list[str] = []
     for data in pages_data:
+        md_lines.append(emit_page_break(data.index))
         if data.kind == "image":
-            current.elements.append(PageImage(data.index, data.image_rel or ""))
+            if data.image_rel:
+                md_lines.append(emit_scan(data.image_rel))
         else:
-            for kind, text in data.elements:
-                if kind == "h2" and use_headings:
-                    # Two-line headings arrive as consecutive h2 elements:
-                    # merge them into one chapter title instead of opening an
-                    # empty chapter per line.
-                    only_heading_so_far = (
-                        len(current.elements) == 1
-                        and isinstance(current.elements[0], Paragraph)
-                        and current.elements[0].kind == "h2"
-                    )
-                    if only_heading_so_far:
-                        merged = f"{current.elements[0].text} {text}".strip()
-                        current.elements[0] = Paragraph(merged, "h2")
-                        current.title = clean.clean_heading(merged) or current.title
-                    else:
-                        flush()
-                        current.title = clean.clean_heading(text) or text
-                        current.elements.append(Paragraph(text, "h2"))
-                else:
-                    current.elements.append(Paragraph(text, kind))
-        pages_in_chapter += 1
-        if not use_headings and pages_in_chapter >= max(1, opts.split_every):
-            flush()
-    flush()
+            md_lines.extend(emit_elements(data.elements))
+    markdown = "\n".join(md_lines)
+    if opts.debug_markdown:
+        Path(opts.debug_markdown).write_text(markdown, encoding="utf-8")
 
-    if not chapters:
-        chapters = [Chapter(title="", elements=[Paragraph("(لم يُتعرف على نص)", "p")])]
-    chapters = _split_giant_chapters(chapters)
-    for i, chapter in enumerate(chapters):
+    title = opts.meta.title or default_title(pdf_path)
+    book = markdown_to_book(markdown, title=title, author=opts.meta.author,
+                            language=opts.meta.language, split_every=opts.split_every)
+
+    book.chapters = _split_giant_chapters(book.chapters)
+    for i, chapter in enumerate(book.chapters):
         if not chapter.title:
             chapter.title = f"قسم {i + 1}"
 
     # Optional final transform: bake letter-joining into the text for simple
-    # renderers (CrossPoint etc.). Must come after ALL other text processing.
+    # renderers (CrossPoint etc.). Must come after the Markdown round-trip
+    # (preshape only touches final Arabic glyphs, never markup).
     if opts.preshape:
         from .textproc.preshape import preshape_text
 
-        for chapter in chapters:
+        for chapter in book.chapters:
             chapter.title = preshape_text(chapter.title)
             for el in chapter.elements:
                 if isinstance(el, Paragraph):
                     el.text = preshape_text(el.text)
 
-    title = opts.meta.title or default_title(pdf_path)
-    book = Book(title=title, author=opts.meta.author, language=opts.meta.language,
-                chapters=chapters)
     text_dir = work.stage_dir("text")
     book.save(text_dir / "book.json")
 
@@ -436,8 +351,8 @@ def run_text_mode(
 
     font_files = resolve_fonts(opts.font)
     # Weight chapters by content so multi-volume splits come out even.
-    weights = [sum(_element_weight(el) for el in ch.elements) for ch in chapters]
-    chunks = _volume_chunks(chapters, opts.split_volumes, weights)
+    weights = [sum(_element_weight(el) for el in ch.elements) for ch in book.chapters]
+    chunks = _volume_chunks(book.chapters, opts.split_volumes, weights)
     for vol, chunk in enumerate(chunks):
         vol_title = title if len(chunks) == 1 else f"{title} — {vol + 1}"
         vol_out = _volume_path(out_path, vol, len(chunks))

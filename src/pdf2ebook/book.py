@@ -10,7 +10,7 @@ from pathlib import Path
 @dataclass
 class Paragraph:
     text: str
-    kind: str = "p"  # p | h2
+    kind: str = "p"  # p | h1 | h2 | h3 | ul | ol | verse | quran
 
 
 @dataclass

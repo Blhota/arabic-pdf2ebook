@@ -10,6 +10,7 @@ from __future__ import annotations
 from statistics import median
 
 from ..ocr.base import OcrPage
+from .dehyphen import join_wrapped
 
 TERMINAL_PUNCT = ".؟!:»۔"  # Arabic question mark lives at ؟ = ؟
 
@@ -45,7 +46,8 @@ def page_paragraphs(page: OcrPage) -> list[str]:
         else:
             paragraphs[-1].append(cur.text)
 
-    return [" ".join(chunk).strip() for chunk in paragraphs if " ".join(chunk).strip()]
+    joined = [join_wrapped(chunk) for chunk in paragraphs]
+    return [p for p in joined if p]
 
 
 def merge_page_boundary(prev_paragraphs: list[str], next_paragraphs: list[str]) -> tuple[list[str], list[str]]:

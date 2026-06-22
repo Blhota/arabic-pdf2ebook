@@ -55,6 +55,30 @@ def test_image_epub_fixed_layout(tmp_path):
     assert "pre-paginated" in opf
 
 
+def test_reflow_epub_renders_headings_and_lists(tmp_path):
+    book = Book(
+        title="كتاب القوائم",
+        chapters=[
+            Chapter("الباب الأول", [
+                Paragraph("الباب الأول", "h1"),
+                Paragraph("فقرة افتتاحية.", "p"),
+                Paragraph("البند الأول", "ul"),
+                Paragraph("البند الثاني", "ul"),
+                Paragraph("مبحث فرعي", "h3"),
+                Paragraph("أولا", "ol"),
+                Paragraph("ثانيا", "ol"),
+            ]),
+        ],
+    )
+    out = tmp_path / "lists.epub"
+    build_reflow_epub(book, out, tmp_path, font_files=[])
+    zf = _assert_valid_epub(out)
+    chap = zf.read("OEBPS/text/chap_001.xhtml").decode("utf-8")
+    assert "<h1>" in chap and "<h3>" in chap
+    assert "<ul>" in chap and "<ol>" in chap
+    assert chap.count("<li>") == 4  # 2 ul + 2 ol items, each its own <li>
+
+
 def test_reflow_epub_with_scan_fallback(tmp_path):
     scan = tmp_path / "scans" / "page_0002.png"
     scan.parent.mkdir()

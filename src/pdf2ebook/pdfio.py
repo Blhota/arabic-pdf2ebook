@@ -7,9 +7,13 @@ extraction so born-digital pages can skip OCR entirely.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pypdfium2 as pdfium
 from PIL import Image
+
+if TYPE_CHECKING:
+    from .ocr.base import OcrPage
 
 
 class PdfError(RuntimeError):
@@ -62,6 +66,88 @@ class PdfRasterizer:
                 textpage.close()
         except Exception:
             return ""
+        finally:
+            page.close()
+
+    def extract_text_page(self, index: int) -> "OcrPage | None":
+        """Build an OcrPage from the page's embedded text layer.
+
+        Each pdfium text rect becomes one OcrLine (bbox in top-left pixel space,
+        conf=100), carrying a per-line font size in points so heading tiers can
+        be detected the same way the OCR path does — only with exact sizes.
+        Returns None when the page has no usable text layer.
+        """
+        from statistics import median
+
+        from .ocr.base import OcrLine, OcrPage, OcrWord
+
+        try:
+            import pypdfium2.raw as pdfium_c
+        except Exception:
+            pdfium_c = None
+
+        page = self._doc[index]
+        try:
+            w_pt, h_pt = page.get_size()
+            textpage = page.get_textpage()
+            try:
+                n_chars = textpage.count_chars()
+                char_boxes: list[tuple[float, float, float, float] | None] = []
+                char_sizes: list[float] = []
+                for ci in range(n_chars):
+                    try:
+                        box = textpage.get_charbox(ci)
+                    except Exception:
+                        box = None
+                    size = 0.0
+                    if pdfium_c is not None:
+                        try:
+                            size = float(pdfium_c.FPDFText_GetFontSize(textpage.raw, ci))
+                        except Exception:
+                            size = 0.0
+                    char_boxes.append(box)
+                    char_sizes.append(size)
+
+                try:
+                    n_rects = textpage.count_rects()
+                except Exception:
+                    n_rects = 0
+
+                lines: list[OcrLine] = []
+                for ri in range(n_rects):
+                    try:
+                        left, bottom, right, top = textpage.get_rect(ri)
+                        text = textpage.get_text_bounded(
+                            left=left, bottom=bottom, right=right, top=top) or ""
+                    except Exception:
+                        continue
+                    text = text.strip()
+                    if not text:
+                        continue
+                    # Font size = median size of chars whose box-center lies in this
+                    # rect (ignoring newline glyphs that report size 1.0); fall back
+                    # to the rect height in points.
+                    sizes_here = [
+                        size for box, size in zip(char_boxes, char_sizes)
+                        if box is not None and size > 1.0
+                        and left <= (box[0] + box[2]) / 2 <= right
+                        and bottom <= (box[1] + box[3]) / 2 <= top
+                    ]
+                    font_size = median(sizes_here) if sizes_here else float(top - bottom)
+                    # PDF coords are bottom-left origin; convert to top-left pixels (1pt≈1px).
+                    bbox = (round(left), round(h_pt - top),
+                            round(right - left), round(top - bottom))
+                    lines.append(OcrLine(words=[OcrWord(text, 100.0, bbox)],
+                                         bbox=bbox, size=float(font_size)))
+                if not lines:
+                    return None
+                # Reading order: top-to-bottom, then right-to-left (Arabic).
+                lines.sort(key=lambda ln: (ln.bbox[1], -ln.bbox[0]))
+                return OcrPage(page_no=index, size=(round(w_pt), round(h_pt)), lines=lines)
+            finally:
+                textpage.close()
+        except Exception:
+            return None
         finally:
             page.close()
 

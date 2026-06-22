@@ -20,10 +20,22 @@ JPEG_QUALITY = 70
 
 def _chapter_xhtml(chapter: Chapter, work_root: Path, image_names: dict[int, str]) -> str:
     parts: list[str] = []
-    for el in chapter.elements:
+    els = chapter.elements
+    n = len(els)
+    i = 0
+    while i < n:
+        el = els[i]
         if isinstance(el, Paragraph):
-            if el.kind == "h2":
-                parts.append(f"    <h2>{escape(el.text)}</h2>")
+            if el.kind in ("ul", "ol"):
+                tag = el.kind
+                items: list[str] = []
+                while i < n and isinstance(els[i], Paragraph) and els[i].kind == tag:
+                    items.append(f"<li>{escape(els[i].text)}</li>")
+                    i += 1
+                parts.append(f"    <{tag}>{''.join(items)}</{tag}>")
+                continue
+            if el.kind in ("h1", "h2", "h3"):
+                parts.append(f"    <{el.kind}>{escape(el.text)}</{el.kind}>")
             elif el.kind in ("verse", "quran"):
                 parts.append(f'    <p class="{el.kind}">{escape(el.text)}</p>')
             else:
@@ -34,6 +46,7 @@ def _chapter_xhtml(chapter: Chapter, work_root: Path, image_names: dict[int, str
                 f'    <figure class="scan"><img src="../{name}" alt="صفحة {el.page_no + 1}"/>'
                 f"<figcaption>صفحة {el.page_no + 1}</figcaption></figure>"
             )
+        i += 1
     return "\n".join(parts)
 
 
@@ -104,7 +117,9 @@ def build_reflow_epub(
             name = f"text/chap_{i + 1:03d}.xhtml"
             body = _chapter_xhtml(chapter, work_root, image_names)
             heading = f"    <h2>{escape(chapter.title)}</h2>\n" if chapter.title else ""
-            if not any(isinstance(e, Paragraph) and e.kind == "h2" for e in chapter.elements[:1]):
+            first = chapter.elements[0] if chapter.elements else None
+            starts_with_heading = isinstance(first, Paragraph) and first.kind in ("h1", "h2", "h3")
+            if not starts_with_heading:
                 body = heading + body
             epub.add(f"OEBPS/{name}", xhtml_page(chapter.title or book.title, body,
                                                  book.language, css_href="../styles/style.css"))
